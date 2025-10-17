@@ -1,0 +1,16 @@
+{
+  "name": "action-ollama-codereview",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "build": "npx @vercel/ncc build index.js -o dist -m",
+    "clean": "rm -rf dist node_modules",
+    "dev": "node index.js"
+  },
+  "dependencies": {
+    "@actions/core": "^1.10.1",
+    "fast-glob": "^3.3.2"
+  }
+}

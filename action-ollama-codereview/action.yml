@@ -1,0 +1,42 @@
+name: "Ollama Code Review"
+description: "Revisa código con un modelo Ollama y genera reporte web + JSON"
+author: "tu-usuario"
+inputs:
+  model:
+    description: "Nombre del modelo Ollama (ej: llama3.1, qwen2.5-coder:7b)"
+    required: true
+    default: "qwen2.5-coder:7b"
+  server_url:
+    description: "URL del servidor Ollama (http://localhost:11434)"
+    required: true
+    default: "http://localhost:11434"
+  file_glob:
+    description: "Glob de archivos a revisar (fallback cuando no hay lista explícita)"
+    required: true
+    default: "**/*"
+  exclude_glob:
+    description: "Glob de exclusión (ej: node_modules/**)"
+    required: false
+    default: "node_modules/**"
+  file_list:
+    description: "Lista de archivos (multilínea). Tiene prioridad sobre file_glob."
+    required: false
+    default: ""
+  file_list_path:
+    description: "Ruta a un archivo de texto con paths (uno por línea). Tiene prioridad sobre file_list."
+    required: false
+    default: ""
+  fail_on_critica:
+    description: "Falla el job si hay issues CRÍTICA"
+    required: false
+    default: "true"
+  retention_days:
+    description: "Días de retención del artefacto"
+    required: false
+    default: "7"
+runs:
+  using: "node20"
+  main: "index.js"
+branding:
+  color: "blue"
+  icon: "shield"
