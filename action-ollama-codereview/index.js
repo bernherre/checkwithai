@@ -50,27 +50,46 @@ ${content}
 Please analyze this file and return ONLY the JSON array of issues as specified.`;
 }
 
-async function callOllamaChat(serverUrl, model, userPrompt) {
+async function callOllamaChat(serverUrl, model, userPrompt, attempt = 1) {
     const url = `${serverUrl.replace(/\/$/, "")}/api/chat`;
     const body = {
         model,
         stream: false,
+        // Puedes pasar opciones para aligerar inferencia:
+        // options: { temperature: 0, num_predict: 512, mirostat: 0, num_ctx: 2048 },
         messages: [
             { role: "system", content: systemPrompt },
             { role: "user", content: userPrompt }
         ]
     };
-    const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-    });
-    if (!res.ok) {
-        const txt = await res.text().catch(() => "");
-        throw new Error(`Ollama error: ${res.status} ${res.statusText} - ${txt}`);
+
+    // Timeout 120s
+    const ac = new AbortController();
+    const to = setTimeout(() => ac.abort(), 120_000);
+
+    try {
+        const res = await fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+            signal: ac.signal,
+        });
+        clearTimeout(to);
+        if (!res.ok) {
+            const txt = await res.text().catch(() => "");
+            throw new Error(`Ollama error: ${res.status} ${res.statusText} - ${txt}`);
+        }
+        const data = await res.json();
+        return data?.message?.content ?? "";
+    } catch (err) {
+        clearTimeout(to);
+        if (attempt < 3) {
+            const backoff = 1000 * Math.pow(2, attempt - 1);
+            await new Promise(r => setTimeout(r, backoff));
+            return callOllamaChat(serverUrl, model, userPrompt, attempt + 1);
+        }
+        throw err;
     }
-    const data = await res.json();
-    return data?.message?.content ?? "";
 }
 
 function safeParseJsonArray(txt, fallback = []) {
