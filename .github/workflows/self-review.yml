@@ -1,0 +1,125 @@
+name: Self Code Review (Action repo)
+
+on:
+  pull_request:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build-and-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 1) Asegura build de la Action (ncc) y que dist/ está actualizado
+      - name: Use Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install deps
+        working-directory: action-ollama-codereview
+        run: npm ci
+
+      - name: Build (ncc)
+        working-directory: action-ollama-codereview
+        run: npm run build
+
+      - name: Verify dist up-to-date
+        run: |
+          git status --porcelain
+          # Si el build modificó archivos y no se commitearon, fallamos
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "dist/ no coincide con el código fuente. Ejecuta 'npm run build' y commitea los cambios."
+            git status --porcelain
+            exit 1
+          fi
+
+      # (Opcional) Linter rápido
+      - name: ESLint (optional)
+        if: ${{ false }} # pon a true si añades eslint
+        working-directory: action-ollama-codereview
+        run: npm run lint
+
+      # 2) Levanta Ollama en Docker (hosted runner)
+      - name: Start Ollama in Docker
+        run: |
+          docker run -d --name ollama -p 11434:11434 -v ollama:/root/.ollama ollama/ollama:latest
+          for i in $(seq 1 30); do
+            curl -sS http://localhost:11434/api/tags && break
+            sleep 2
+          done
+          docker exec ollama ollama pull qwen2.5-coder:7b
+
+      # 3) Recolecta archivos cambiados en PR (evita revisar binarios/autogenerados)
+      - name: Collect changed files (PR only)
+        id: changed
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const pr = context.payload.pull_request;
+            const per_page = 100;
+            let page = 1, files = [];
+            while (true) {
+              const { data } = await github.rest.pulls.listFiles({
+                ...context.repo,
+                pull_number: pr.number,
+                per_page,
+                page
+              });
+              files.push(...data);
+              if (data.length < per_page) break;
+              page++;
+            }
+            const paths = files
+              .filter(f => !['removed'].includes(f.status))
+              .map(f => f.filename)
+              // ignora lo autogenerado, artefactos y binarios
+              .filter(p => !p.startsWith('ollama-review-report/')
+                         && !p.match(/\.(png|jpe?g|gif|webp|pdf|zip|ico|wasm)$/i));
+            fs.writeFileSync('changed-files.txt', paths.join('\n'));
+            core.setOutput('count', String(paths.length));
+            core.setOutput('path', 'changed-files.txt');
+
+      # 4) Ejecuta la acción local sobre los archivos cambiados (o fallback a glob)
+      - name: Run self action (PR changed files)
+        if: ${{ github.event_name == 'pull_request' && steps.changed.outputs.count != '0' }}
+        uses: ./action-ollama-codereview
+        with:
+          model: qwen2.5-coder:7b
+          server_url: http://localhost:11434
+          file_list_path: ${{ steps.changed.outputs.path }}
+          exclude_glob: "node_modules/**"
+          # En tu propio repo puedes decidir si bloquear por CRÍTICA:
+          fail_on_critica: "true"
+          retention_days: "7"
+
+      - name: Run self action (fallback to glob)
+        if: ${{ github.event_name != 'pull_request' || steps.changed.outputs.count == '0' }}
+        uses: ./action-ollama-codereview
+        with:
+          model: qwen2.5-coder:7b
+          server_url: http://localhost:11434
+          file_glob: "**/*.{js,json,yml,yaml,md}"
+          exclude_glob: |
+            node_modules/**
+            dist/**
+            ollama-review-report/**
+          fail_on_critica: "true"
+          retention_days: "7"
+
+      # 5) Sube artefacto con el reporte
+      - name: Upload artifact (JSON + HTML)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ollama-review
+          path: ollama-review-report/**
+          retention-days: 7

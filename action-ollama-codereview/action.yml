@@ -36,7 +36,7 @@ inputs:
     default: "7"
 runs:
   using: "node20"
-  main: "index.js"
+  main: "dist/index.js"
 branding:
   color: "blue"
   icon: "shield"
