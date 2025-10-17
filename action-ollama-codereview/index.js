@@ -3,6 +3,9 @@ import fg from "fast-glob";
 import fs from "fs";
 import path from "path";
 
+/* =========================
+   Prompt del revisor
+   ========================= */
 const systemPrompt = `You are “Code Review Assistant”, an expert code reviewer with deep knowledge of secure coding, performance, clean code, and language idioms.
 
 RULES
@@ -35,6 +38,9 @@ CONTEXTO DEL ARCHIVO
 \`\`\`
 Tarea: analiza el archivo y devuelve el JSON con los issues según las reglas.`;
 
+/* =========================
+   Utilidades varias
+   ========================= */
 function buildUserPrompt(filename, extension, content) {
     return `Code Review Assistant
 
@@ -50,22 +56,41 @@ ${content}
 Please analyze this file and return ONLY the JSON array of issues as specified.`;
 }
 
+function show(s) {
+    // Para logs: hace visibles \r y \n
+    return String(s ?? "")
+        .replace(/\r/g, "\\r")
+        .replace(/\n/g, "\\n");
+}
+
+/** Convierte exclude_glob multilínea en array de patrones negativos */
+function negativePatternsFromExclude(exclude_glob) {
+    if (!exclude_glob) return [];
+    const lines = String(exclude_glob)
+        .split(/\r?\n/)
+        .map((s) => s.trim())
+        .filter(Boolean);
+    // fast-glob acepta múltiples patrones; anteponemos "!" a cada exclusión
+    return lines.map((p) => (p.startsWith("!") ? p : `!${p}`));
+}
+
+/** Llama a /api/chat con timeout + reintentos (anti "fetch failed") */
 async function callOllamaChat(serverUrl, model, userPrompt, attempt = 1) {
     const url = `${serverUrl.replace(/\/$/, "")}/api/chat`;
     const body = {
         model,
         stream: false,
-        // Puedes pasar opciones para aligerar inferencia:
+        // Si quieres aligerar la inferencia, descomenta o ajusta:
         // options: { temperature: 0, num_predict: 512, mirostat: 0, num_ctx: 2048 },
         messages: [
             { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt }
-        ]
+            { role: "user", content: userPrompt },
+        ],
     };
 
-    // Timeout 120s
     const ac = new AbortController();
-    const to = setTimeout(() => ac.abort(), 120_000);
+    const timeoutMs = 120_000; // 120s por archivo
+    const to = setTimeout(() => ac.abort(), timeoutMs);
 
     try {
         const res = await fetch(url, {
@@ -83,9 +108,13 @@ async function callOllamaChat(serverUrl, model, userPrompt, attempt = 1) {
         return data?.message?.content ?? "";
     } catch (err) {
         clearTimeout(to);
+        // Backoff exponencial: 1s, 2s
         if (attempt < 3) {
             const backoff = 1000 * Math.pow(2, attempt - 1);
-            await new Promise(r => setTimeout(r, backoff));
+            core.warning(
+                `[retry] intento ${attempt} falló (${err?.message || err}); reintentando en ${backoff}ms`
+            );
+            await new Promise((r) => setTimeout(r, backoff));
             return callOllamaChat(serverUrl, model, userPrompt, attempt + 1);
         }
         throw err;
@@ -97,21 +126,25 @@ function safeParseJsonArray(txt, fallback = []) {
         try {
             const parsed = JSON.parse(s.trim());
             return Array.isArray(parsed) ? parsed : null;
-        } catch { return null; }
+        } catch {
+            return null;
+        }
     };
     let result = tryParse(txt);
     if (result) return result;
 
-    const m = txt.match(/```json([\s\S]*?)```/i) || txt.match(/```([\s\S]*?)```/i);
+    const m =
+        txt.match(/```json([\s\S]*?)```/i) ||
+        txt.match(/```([\s\S]*?)```/i);
     if (m?.[1]) {
         result = tryParse(m[1]);
         if (result) return result;
     }
-    // Último recurso: busca primer [ ... ]
-    const bracket = txt.indexOf("[");
-    const last = txt.lastIndexOf("]");
-    if (bracket !== -1 && last !== -1 && last > bracket) {
-        result = tryParse(txt.slice(bracket, last + 1));
+    // Último recurso: extrae el primer bloque [ ... ]
+    const start = txt.indexOf("[");
+    const end = txt.lastIndexOf("]");
+    if (start !== -1 && end !== -1 && end > start) {
+        result = tryParse(txt.slice(start, end + 1));
         if (result) return result;
     }
     return fallback;
@@ -130,10 +163,15 @@ function htmlEscape(s) {
 
 function generateHtmlReport(results) {
     const totalIssues = results.reduce((acc, r) => acc + r.issues.length, 0);
-    const criticas = results.flatMap(r => r.issues.filter(i => (i.severity || "").toUpperCase() === "CRÍTICA"));
+    const criticas = results.flatMap((r) =>
+        r.issues.filter((i) => (i.severity || "").toUpperCase() === "CRÍTICA")
+    );
 
-    const rows = results.map(r => {
-        const items = r.issues.map((i, idx) => `
+    const rows = results
+        .map((r) => {
+            const items = r.issues
+                .map(
+                    (i, idx) => `
       <tr>
         <td>${idx + 1}</td>
         <td><code>${htmlEscape(r.file)}</code></td>
@@ -142,15 +180,20 @@ function generateHtmlReport(results) {
         <td>${htmlEscape(i.description || "")}</td>
         <td><pre>${htmlEscape(i.solution || "")}</pre></td>
         <td>${htmlEscape(i.explanation || "")}</td>
-      </tr>
-    `).join("");
-        return items || `
+      </tr>`
+                )
+                .join("");
+            return (
+                items ||
+                `
       <tr>
         <td>–</td><td><code>${htmlEscape(r.file)}</code></td>
         <td colspan="5"><em>Sin hallazgos</em></td>
       </tr>
-    `;
-    }).join("");
+    `
+            );
+        })
+        .join("");
 
     return `<!doctype html>
 <html lang="es">
@@ -193,7 +236,9 @@ function generateHtmlReport(results) {
 </html>`;
 }
 
-// === Anotaciones en la UI del job ===
+/* =========================
+   Anotaciones y Summary
+   ========================= */
 function severityToCommand(sev = "") {
     const s = (sev || "").toUpperCase();
     if (s === "CRÍTICA") return "error";
@@ -219,16 +264,16 @@ function emitAnnotations(results) {
             if (r.file) loc.push(`file=${r.file}`);
             if (line) loc.push(`line=${line}`);
             const header = loc.length ? `${cmd} ${loc.join(",")}` : cmd;
-            const msg = `${i.description || "Issue"}${i.explanation ? ` — ${i.explanation}` : ""}`;
+            const msg = `${i.description || "Issue"}${i.explanation ? ` — ${i.explanation}` : ""
+                }`;
             console.log(`::${header}::${msg}`);
         }
     }
 }
 
-// === Barra de mensajes (Job Summary) ===
 function writeStepSummary(results) {
     const totalFiles = results.length;
-    const counts = { "CRÍTICA": 0, "ALTA": 0, "MEDIA": 0, "BAJA": 0 };
+    const counts = { CRÍTICA: 0, ALTA: 0, MEDIA: 0, BAJA: 0 };
     let totalIssues = 0;
     for (const r of results) {
         for (const i of r.issues) {
@@ -254,11 +299,17 @@ function writeStepSummary(results) {
     if (summaryPath) fs.appendFileSync(summaryPath, summary + "\n");
 }
 
+/* =========================
+   Resolución de archivos
+   ========================= */
 function uniqKeepOrder(arr) {
     const seen = new Set();
     const out = [];
     for (const x of arr) {
-        if (!seen.has(x)) { seen.add(x); out.push(x); }
+        if (!seen.has(x)) {
+            seen.add(x);
+            out.push(x);
+        }
     }
     return out;
 }
@@ -266,37 +317,44 @@ function uniqKeepOrder(arr) {
 async function resolveFiles({ file_list_path, file_list, file_glob, exclude_glob }) {
     let files = [];
 
-    // 1) file_list_path: lee líneas del archivo si existe
+    // 1) file_list_path
     if (file_list_path) {
         try {
             const raw = fs.readFileSync(file_list_path, "utf8");
-            files = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+            files = raw.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+            core.info(`[debug] using file_list_path (${files.length} rutas)`);
         } catch {
             core.warning(`No se pudo leer file_list_path: ${file_list_path}`);
         }
     }
 
-    // 2) file_list: multiline input
+    // 2) file_list (multilínea)
     if (files.length === 0 && file_list) {
-        files = file_list.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        files = file_list.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+        core.info(`[debug] using file_list (${files.length} rutas)`);
     }
 
     // 3) glob fallback
     if (files.length === 0) {
+        const negs = negativePatternsFromExclude(exclude_glob);
         const patterns = [
             file_glob,
-            `!${exclude_glob}`,
+            ...negs,
             "!.git/**",
             "!**/*.png", "!**/*.jpg", "!**/*.jpeg", "!**/*.gif", "!**/*.webp",
-            "!**/*.pdf", "!**/*.zip", "!**/*.ico", "!**/*.wasm", "!**/*.exe", "!**/*.dll", "!**/*.so"
+            "!**/*.pdf", "!**/*.zip", "!**/*.ico", "!**/*.wasm", "!**/*.exe", "!**/*.dll", "!**/*.so",
         ];
+        core.info(`[debug] glob.patterns="${show(patterns.join(" | "))}"`);
         files = await fg(patterns, { dot: true });
     } else {
-        // Filtra binarios comunes y exclusiones
+        // Filtra binarios y asegura que existan
         const binRegex = /\.(png|jpg|jpeg|gif|webp|pdf|zip|ico|wasm|exe|dll|so)$/i;
-        const excluded = exclude_glob ? await fg([`!${exclude_glob}`], { dot: true }) : null;
-        files = files.filter(f =>
-            f && !binRegex.test(f) && fs.existsSync(f) && fs.statSync(f).isFile()
+        files = files.filter(
+            (f) =>
+                f &&
+                !binRegex.test(f) &&
+                fs.existsSync(f) &&
+                fs.statSync(f).isFile()
         );
         files = uniqKeepOrder(files);
     }
@@ -304,6 +362,9 @@ async function resolveFiles({ file_list_path, file_list, file_glob, exclude_glob
     return files;
 }
 
+/* =========================
+   Programa principal
+   ========================= */
 async function run() {
     try {
         const model = core.getInput("model");
@@ -315,8 +376,28 @@ async function run() {
         const failOnCritica = core.getInput("fail_on_critica") === "true";
         const retentionDays = parseInt(core.getInput("retention_days"), 10) || 7;
 
-        const files = await resolveFiles({ file_list_path, file_list, file_glob, exclude_glob });
+        // Logs de inputs (con \n visibles)
+        core.info(`[inputs] model="${show(model)}" server_url="${show(serverUrl)}"`);
+        core.info(`[inputs] file_glob="${show(file_glob)}"`);
+        core.info(`[inputs] exclude_glob="${show(exclude_glob)}"`);
+        core.info(`[inputs] file_list_path="${show(file_list_path)}"`);
+        core.info(
+            `[inputs] file_list(len=${file_list ? file_list.split(/\r?\n/).filter(Boolean).length : 0
+            })="${show(file_list)}"`
+        );
 
+        const files = await resolveFiles({
+            file_list_path,
+            file_list,
+            file_glob,
+            exclude_glob,
+        });
+
+        core.info(`[debug] files.count=${files.length}`);
+        if (files.length) {
+            const preview = files.slice(0, 20).join(", ");
+            core.info(`[debug] files.preview(<=20)=${show(preview)}`);
+        }
         if (files.length === 0) {
             core.warning("No se encontraron archivos a revisar.");
         }
@@ -331,7 +412,7 @@ async function run() {
                 core.warning(`No se pudo leer como texto: ${file}`);
                 continue;
             }
-            const extension = path.extname(file).replace(".", "") || "txt";
+            const extension = extOf(file);
             const prompt = buildUserPrompt(file, extension, content);
             const raw = await callOllamaChat(serverUrl, model, prompt);
             const issues = safeParseJsonArray(raw, []);
@@ -341,8 +422,14 @@ async function run() {
         // Genera salida web
         const outDir = path.join(process.cwd(), "ollama-review-report");
         fs.mkdirSync(outDir, { recursive: true });
-        fs.writeFileSync(path.join(outDir, "report.json"), JSON.stringify(results, null, 2));
-        fs.writeFileSync(path.join(outDir, "index.html"), generateHtmlReport(results));
+        fs.writeFileSync(
+            path.join(outDir, "report.json"),
+            JSON.stringify(results, null, 2)
+        );
+        fs.writeFileSync(
+            path.join(outDir, "index.html"),
+            generateHtmlReport(results)
+        );
 
         core.info(`Reporte generado en ${outDir}`);
 
@@ -355,7 +442,9 @@ async function run() {
         core.setOutput("retention_days", retentionDays.toString());
 
         // Gate por CRÍTICA
-        const anyCritica = results.some(r => r.issues.some(i => (i.severity || "").toUpperCase() === "CRÍTICA"));
+        const anyCritica = results.some((r) =>
+            r.issues.some((i) => (i.severity || "").toUpperCase() === "CRÍTICA")
+        );
         if (failOnCritica && anyCritica) {
             core.setFailed("Se encontraron issues con severidad CRÍTICA.");
         }
