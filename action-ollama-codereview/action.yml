@@ -1,63 +1,72 @@
 ﻿name: "Ollama Code Review"
-description: "Revisa código con un modelo Ollama y genera reporte web + JSON"
-author: "tu-usuario"
+description: "Revisa código con Ollama y genera reporte web + JSON + anotaciones."
+author: "bernherre"
 inputs:
   model:
-    description: "Nombre del modelo Ollama (ej: llama3.1, qwen2.5-coder:7b)"
+    description: "Modelo Ollama (ej: qwen2.5-coder:7b)"
     required: true
     default: "qwen2.5-coder:7b"
   server_url:
-    description: "URL del servidor Ollama (http://localhost:11434)"
+    description: "URL del servidor Ollama"
     required: true
-    default: "http://localhost:11434"
+    default: "http://127.0.0.1:11434"
+
   file_glob:
-    description: "Glob de archivos a revisar (fallback)"
-    required: true
+    description: "Glob de archivos (fallback)"
+    required: false
     default: "**/*"
   exclude_glob:
-    description: "Glob de exclusión"
+    description: "Patrones de exclusión (multilínea)"
     required: false
-    default: "node_modules/**"
+    default: ""
   file_list:
-    description: "Lista de archivos (multilínea). Prioridad sobre file_glob."
+    description: "Lista de archivos (multilínea)"
     required: false
     default: ""
   file_list_path:
-    description: "Ruta a archivo con paths (uno por línea). Máxima prioridad."
+    description: "Ruta a archivo con paths (uno por línea)"
     required: false
     default: ""
+
   fail_on_critica:
-    description: "Falla el job si hay issues CRÍTICA"
+    description: "Fallar si hay issues CRÍTICA"
     required: false
     default: "true"
   retention_days:
-    description: "Días de retención del artefacto"
+    description: "Días de retención del artifact"
     required: false
     default: "7"
-  # 🔧 NUEVO: resiliencia y control
+
+  # Resiliencia / performance
   request_timeout_ms:
-    description: "Timeout por archivo en ms (anti fetch failed)"
+    description: "Timeout por archivo (ms)"
     required: false
-    default: "300000" # 5 minutos
+    default: "300000"
   max_bytes_per_file:
-    description: "Máximo de bytes a enviar por archivo (se trunca)"
+    description: "Máximo de bytes por archivo (truncado)"
     required: false
-    default: "307200" # 300 KB
+    default: "307200"
   ollama_num_predict:
-    description: "Límite de tokens de salida (num_predict)"
+    description: "Tokens de salida (num_predict)"
     required: false
     default: "512"
   ollama_num_ctx:
-    description: "Contexto máximo de tokens (num_ctx)"
+    description: "Contexto (num_ctx)"
     required: false
     default: "2048"
   ollama_temperature:
-    description: "Temperatura de muestreo"
+    description: "Temperatura"
     required: false
     default: "0"
+  review_max_concurrency:
+    description: "Máximo de archivos procesados en paralelo"
+    required: false
+    default: "2"
+
 runs:
   using: "node20"
   main: "dist/index.js"
+
 branding:
   color: "blue"
   icon: "shield"

@@ -1,4 +1,4 @@
-name: Self Code Review (Action repo)
+Ôªøname: Self Code Review (Action repo)
 
 on:
   pull_request:
@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # 1) Asegura build de la Action (ncc) y que dist/ est· actualizado
+      # 1) Asegura build de la Action (ncc) y que dist/ est√° actualizado
       - name: Use Node 20
         uses: actions/setup-node@v4
         with:
@@ -42,16 +42,16 @@ jobs:
       - name: Verify dist up-to-date
         run: |
           git status --porcelain
-          # Si el build modificÛ archivos y no se commitearon, fallamos
+          # Si el build modific√≥ archivos y no se commitearon, fallamos
           if [ -n "$(git status --porcelain)" ]; then
-            echo "dist/ no coincide con el cÛdigo fuente. Ejecuta 'npm run build' y commitea los cambios."
+            echo "dist/ no coincide con el c√≥digo fuente. Ejecuta 'npm run build' y commitea los cambios."
             git status --porcelain
             exit 1
           fi
 
-      # (Opcional) Linter r·pido
+      # (Opcional) Linter r√°pido
       - name: ESLint (optional)
-        if: ${{ false }} # pon a true si aÒades eslint
+        if: ${{ false }} # pon a true si a√±ades eslint
         working-directory: action-ollama-codereview
         run: npm run lint
 
@@ -97,14 +97,16 @@ jobs:
             core.setOutput('count', String(paths.length));
             core.setOutput('path', 'changed-files.txt');
 
-      # 4) Ejecuta la acciÛn local sobre los archivos cambiados (o fallback a glob)
-      - name: Run Ollama Code Review (glob)
+      # 4) Ejecuta la acci√≥n local sobre los archivos cambiados (o fallback a glob)
+      - name: Run Ollama Code Review (PR changed files)
+        if: ${{ github.event_name == 'pull_request' && steps.changed.outputs.count != '0' }}
         uses: bernherre/checkwithai/action-ollama-codereview@v1
+        env:
+          REVIEW_MAX_CONCURRENCY: ${{ env.REVIEW_MAX_CONCURRENCY }}
         with:
-          model: qwen2.5-coder:7b
+          model: ${{ env.MODEL }}
           server_url: http://127.0.0.1:11434
-          # Limita el alcance (ajusta la carpeta a tu proyecto real)
-          file_glob: "src/**/*.{ts,tsx,js,jsx}"
+          file_list_path: ${{ steps.changed.outputs.path }}
           exclude_glob: |
             **/node_modules/**
             **/dist/**
@@ -112,32 +114,19 @@ jobs:
             **/.next/**
             **/coverage/**
             **/ollama-review-report/**
-            action-ollama-codereview/**   # <- evita revisarte a ti mismo
             **/*.lock
             package-lock.json
             yarn.lock
             pnpm-lock.yaml
           fail_on_critica: "true"
           retention_days: "7"
+          # performance / resiliencia
           request_timeout_ms: "300000"
-          max_bytes_per_file: "307200"
-          ollama_num_predict: "512"
-          ollama_num_ctx: "2048"
-          ollama_temperature: "0"
+          max_bytes_per_file: "200000"
+          ollama_num_predict: "256"
+          ollama_num_ctx: "1536"
+          ollama_temperature: "0.3"
 
-      - name: Run self action (fallback to glob)
-        if: ${{ github.event_name != 'pull_request' || steps.changed.outputs.count == '0' }}
-        uses: ./action-ollama-codereview
-        with:
-          model: qwen2.5-coder:7b
-          server_url: http://localhost:11434
-          file_glob: "**/*.{js,json,yml,yaml,md}"
-          exclude_glob: |
-            node_modules/**
-            dist/**
-            ollama-review-report/**
-          fail_on_critica: "true"
-          retention_days: "7"
 
       # 5) Sube artefacto con el reporte
       - name: Upload artifact (JSON + HTML)

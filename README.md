@@ -29,10 +29,21 @@ npm ci
 npm run build
 cd ..
 git add .
-git commit -m "feat: timeout/retry + truncado + opciones ollama + debug inputs"
+git commit -m "fix: recursive excludes and default negs in glob"
 git push
-git tag -a v1.0.7 -m "v1.0.7"
-git push origin v1.0.7
+git tag -a v1.0.9 -m "v1.0.9"
+git push origin v1.0.9
 git tag -fa v1 -m "v1"
 git push origin v1 --force
 ```
+
+# Ejemplo retag
+```git tag -d v1.0.6
+git push origin :refs/tags/v1.0.6
+git tag -a v1.0.6 -m "v1.0.6"
+git push origin v1.0.6
+
+# (opcional) mueve el alias estable
+git tag -fa v1 -m "v1"
+git push origin v1 --force
+```  
