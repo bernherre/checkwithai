@@ -1,0 +1,4 @@
+node_modules/
+ollama-review-report/
+.vs/
+.github/workflows/selfhosted.yml

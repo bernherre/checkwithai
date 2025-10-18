@@ -1,0 +1,109 @@
+﻿name: Code Review (Ollama in Docker + Messages)
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+  issue_comment:
+    types: [created]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      actions: read
+      pages: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start Ollama in Docker
+        run: |
+          docker run -d --name ollama -p 11434:11434 -v ollama:/root/.ollama ollama/ollama:latest
+          for i in $(seq 1 30); do
+            curl -sS http://localhost:11434/api/tags && break
+            sleep 2
+          done
+          docker exec ollama ollama pull qwen2.5-coder:7b
+
+      - name: Run Ollama Code Review
+        id: review
+        uses: ./action-ollama-codereview
+        with:
+          model: qwen2.5-coder:7b
+          server_url: http://localhost:11434
+          file_glob: "src/**/*.{ts,tsx,js,jsx,py,cs,java,go,rs}"
+          exclude_glob: "node_modules/**"
+          fail_on_critica: "false"
+          retention_days: "7"
+
+      - name: Upload artifact (JSON + HTML)
+        uses: actions/upload-artifact@v4
+        with:
+          name: ollama-review
+          path: ollama-review-report/**
+          retention-days: 7
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ollama-review-report
+
+      - name: Deploy to GitHub Pages
+        if: ${{ github.event_name != 'merge_group' }}
+        uses: actions/deploy-pages@v4
+
+      # Comentario pegajoso en PR con resumen + link a Pages (solo PR)
+      - name: Sticky PR comment (simple)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          recreate: true
+          message: |
+            ## 🧠 Ollama Code Review – Reporte
+            El reporte HTML fue publicado como artefacto **ollama-review** y en **GitHub Pages** para este repo.
+            Descarga también `report.json` desde los artefactos.
+            <!-- OLLAMA-REVIEW -->
+
+      # Comentario con conteos usando github-script
+      - name: PR summary (github-script)
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const report = JSON.parse(fs.readFileSync('ollama-review-report/report.json','utf8'));
+            const counts = { "CRÍTICA":0, "ALTA":0, "MEDIA":0, "BAJA":0 };
+            let total = 0;
+            for (const r of report) for (const i of r.issues) {
+              total++;
+              const k = (i.severity||'').toUpperCase();
+              counts[k] = (counts[k] ?? 0) + 1;
+            }
+            const body = [
+              '## 🧠 Ollama Code Review – Resumen',
+              `**Issues totales:** ${total}`,
+              `- CRÍTICA: ${counts["CRÍTICA"]||0}`,
+              `- ALTA: ${counts["ALTA"]||0}`,
+              `- MEDIA: ${counts["MEDIA"]||0}`,
+              `- BAJA: ${counts["BAJA"]||0}`,
+              '',
+              'Consulta el artefacto **ollama-review** (`index.html` y `report.json`) y el HTML publicado en Pages.',
+              '<!-- OLLAMA-REVIEW-SUMMARY -->'
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              ...context.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body && c.body.includes('<!-- OLLAMA-REVIEW-SUMMARY -->'));
+            if (existing) {
+              await github.rest.issues.updateComment({ ...context.repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });
+            }
