@@ -9,6 +9,7 @@ on:
 jobs:
   build-and-review:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: write
@@ -23,21 +24,12 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install deps
-        working-directory: action-ollama-codereview
-        run: npm ci
-
       - name: Build (ncc)
         working-directory: action-ollama-codereview
-        run: npm run build
+        run: |
+            npm ci
+            npm run build
 
-      - name: Install deps
-        working-directory: action-ollama-codereview
-        run: npm ci
-
-      - name: Build (ncc)
-        working-directory: action-ollama-codereview
-        run: npm run build
 
       - name: Verify dist up-to-date
         run: |

@@ -31,7 +31,7 @@ jobs:
       - name: Setup Ollama
         uses: ai-action/setup-ollama@v1
         with:
-          # version: 0.3.14  # opcional, fija versión
+          version: 0.3.14  # opcional, fija versión
 
       # 2) Cache de modelos para acelerar pulls
       - name: Cache Ollama models
@@ -156,3 +156,9 @@ jobs:
           name: ollama-review
           path: ollama-review-report/**
           retention-days: 7
+      - name: Post sticky comment (safe)
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          message: |
+            ✅ Review listo. Descarga el artifact **ollama-review** desde la pestaña *Summary* del job.
+             Si tienes GitHub Pages habilitado para este repo, publica el directorio `ollama-review-report/` y comparte esa URL (https://...github.io/tu-repo/).
