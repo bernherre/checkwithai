@@ -337,16 +337,24 @@ async function resolveFiles({ file_list_path, file_list, file_glob, exclude_glob
     // 3) glob fallback
     if (files.length === 0) {
         const negs = negativePatternsFromExclude(exclude_glob);
-        const patterns = [
-            file_glob,
-            ...negs,
-            "!.git/**",
+        const defaultNegs = [
+            "!**/node_modules/**",
+            "!**/dist/**",
+            "!**/build/**",
+            "!**/.next/**",
+            "!**/coverage/**",
+            "!**/ollama-review-report/**",
             "!**/*.png", "!**/*.jpg", "!**/*.jpeg", "!**/*.gif", "!**/*.webp",
             "!**/*.pdf", "!**/*.zip", "!**/*.ico", "!**/*.wasm", "!**/*.exe", "!**/*.dll", "!**/*.so",
+            "!**/*.lock", "!package-lock.json", "!yarn.lock", "!pnpm-lock.yaml",
+            "!**/.git/**",
+            "!action-ollama-codereview/**" // evita self-review de la propia acción
         ];
+        const patterns = [file_glob, ...defaultNegs, ...negs];
         core.info(`[debug] glob.patterns="${show(patterns.join(" | "))}"`);
         files = await fg(patterns, { dot: true });
-    } else {
+    }
+    else {
         // Filtra binarios y asegura que existan
         const binRegex = /\.(png|jpg|jpeg|gif|webp|pdf|zip|ico|wasm|exe|dll|so)$/i;
         files = files.filter(
