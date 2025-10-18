@@ -98,17 +98,32 @@ jobs:
             core.setOutput('path', 'changed-files.txt');
 
       # 4) Ejecuta la acción local sobre los archivos cambiados (o fallback a glob)
-      - name: Run self action (PR changed files)
-        if: ${{ github.event_name == 'pull_request' && steps.changed.outputs.count != '0' }}
-        uses: ./action-ollama-codereview
+      - name: Run Ollama Code Review (glob)
+        uses: bernherre/checkwithai/action-ollama-codereview@v1
         with:
           model: qwen2.5-coder:7b
-          server_url: http://localhost:11434
-          file_list_path: ${{ steps.changed.outputs.path }}
-          exclude_glob: "node_modules/**"
-          # En tu propio repo puedes decidir si bloquear por CRÍTICA:
+          server_url: http://127.0.0.1:11434
+          # Limita el alcance (ajusta la carpeta a tu proyecto real)
+          file_glob: "src/**/*.{ts,tsx,js,jsx}"
+          exclude_glob: |
+            **/node_modules/**
+            **/dist/**
+            **/build/**
+            **/.next/**
+            **/coverage/**
+            **/ollama-review-report/**
+            action-ollama-codereview/**   # <- evita revisarte a ti mismo
+            **/*.lock
+            package-lock.json
+            yarn.lock
+            pnpm-lock.yaml
           fail_on_critica: "true"
           retention_days: "7"
+          request_timeout_ms: "300000"
+          max_bytes_per_file: "307200"
+          ollama_num_predict: "512"
+          ollama_num_ctx: "2048"
+          ollama_temperature: "0"
 
       - name: Run self action (fallback to glob)
         if: ${{ github.event_name != 'pull_request' || steps.changed.outputs.count == '0' }}
