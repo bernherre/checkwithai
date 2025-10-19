@@ -5,3 +5,4 @@ ollama-review-report/
 .github/workflows/ai-review-no-doocckkeer.yml
 .github/workflows/ai-review-reusable.yml
 .github/workflows/ai-review-no-docker.yml
+action-ollama-codereview/dist/**
