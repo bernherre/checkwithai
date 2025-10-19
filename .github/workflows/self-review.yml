@@ -83,7 +83,7 @@ jobs:
       - name: Run Ollama Code Review (PR changed files)
         id: review_pr
         if: ${{ github.event_name == 'pull_request' && steps.changed.outputs.count != '0' }}
-        uses: bernherre/checkwithai/action-ollama-codereview@v1
+        uses: ./action-ollama-codereview
         env:
           REVIEW_MAX_CONCURRENCY: ${{ env.REVIEW_MAX_CONCURRENCY }}
         with:
@@ -98,6 +98,11 @@ jobs:
             **/coverage/**
             **/ollama-review-report/**
             action-ollama-codereview/**
+            **/*.lock
+            package-lock.json
+            yarn.lock
+            pnpm-lock.yaml
+            action-ollama-codereview/**
           fail_on_critica: "true"
           retention_days: "7"
           request_timeout_ms: "600000"
@@ -110,7 +115,7 @@ jobs:
       - name: Run Ollama Code Review (fallback only-code)
         id: review_fb
         if: ${{ github.event_name != 'pull_request' || steps.changed.outputs.count == '0' }}
-        uses: bernherre/checkwithai/action-ollama-codereview@v1
+        uses: ./action-ollama-codereview
         env:
           REVIEW_MAX_CONCURRENCY: ${{ env.REVIEW_MAX_CONCURRENCY }}
         with:
@@ -125,6 +130,10 @@ jobs:
             **/coverage/**
             **/ollama-review-report/**
             action-ollama-codereview/**
+            **/*.lock
+            package-lock.json
+            yarn.lock
+            pnpm-lock.yaml
           fail_on_critica: "true"
           retention_days: "7"
           request_timeout_ms: "600000"

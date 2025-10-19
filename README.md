@@ -32,9 +32,9 @@ cd ..
 git add .
 git commit -m "ultimo fix CJS"
 git push
-git tag -a v1.3.2 -m "v1.3.2"
-git push origin v1.3.2
-git tag -fa v1 -m "v1"
+git tag -a v1.4.0 -m "v1.4.0"
+git push origin v1.4.0
+git tag -fa v1 -m "v1 -> v1.4.0"
 git push origin v1 --force
 ```
 
@@ -46,6 +46,6 @@ git tag -a v1.3.3 -m "v1.3.3"
 git push origin v1.3.3
 
 # (opcional) mueve el alias estable
-git tag -fa v1.3.3 -m "v1.3.3"
+git tag -fa v1 -m "v1 -> v1.3.4"
 git push origin v1.3.3 --force
 ```  
