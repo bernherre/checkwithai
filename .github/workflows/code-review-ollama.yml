@@ -93,7 +93,7 @@ jobs:
       # 4) Ejecuta tu acción (PR: solo cambiados; Push: glob)
       - name: Run Ollama Code Review (PR changed files)
         if: ${{ github.event_name == 'pull_request' && steps.changed.outputs.count != '0' }}
-        uses: bernherre/checkwithai/action-ollama-codereview@v1.3.3
+        uses: bernherre/checkwithai/action-ollama-codereview@v1.3.4
         env:
           REVIEW_MAX_CONCURRENCY: ${{ env.REVIEW_MAX_CONCURRENCY }}
         with:
@@ -123,7 +123,7 @@ jobs:
 
       - name: Run Ollama Code Review (glob fallback)
         if: ${{ github.event_name != 'pull_request' || steps.changed.outputs.count == '0' }}
-        uses: bernherre/checkwithai/action-ollama-codereview@v1.3.3
+        uses: bernherre/checkwithai/action-ollama-codereview@v1.3.4
         env:
           REVIEW_MAX_CONCURRENCY: ${{ env.REVIEW_MAX_CONCURRENCY }}
         with:
