@@ -32,9 +32,9 @@ cd ..
 git add .
 git commit -m "CJS"
 git push
-git tag -a v1.4.0 -m "v1.4.0"
-git push origin v1.4.0
-git tag -fa v1 -m "v1 -> v1.4.0"
+git tag -a v1.4.1 -m "v1.4.1"
+git push origin v1.4.1
+git tag -fa v1 -m "v1 -> v1.4.1"
 git push origin v1 --force
 ```
 
