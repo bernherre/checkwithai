@@ -1,6 +1,6 @@
 ﻿name: "Ollama Code Review"
 description: "Revisa archivos de código con un LLM local (Ollama) y genera reportes."
-author: "tu-usuario"
+author: "bernherre"
 
 inputs:
   model:
