@@ -83,7 +83,7 @@ jobs:
       - name: Run Ollama Code Review (PR changed files)
         id: review_pr
         if: ${{ github.event_name == 'pull_request' && steps.changed.outputs.count != '0' }}
-        uses: bernherre/checkwithai/action-ollama-codereview@v1
+        uses: bernherre/checkwithai/action-ollama-codereview@v1.1.0
         env:
           REVIEW_MAX_CONCURRENCY: ${{ env.REVIEW_MAX_CONCURRENCY }}
         with:
@@ -110,7 +110,7 @@ jobs:
       - name: Run Ollama Code Review (fallback only-code)
         id: review_fb
         if: ${{ github.event_name != 'pull_request' || steps.changed.outputs.count == '0' }}
-        uses: bernherre/checkwithai/action-ollama-codereview@v1
+        uses: bernherre/checkwithai/action-ollama-codereview@v1.1.0
         env:
           REVIEW_MAX_CONCURRENCY: ${{ env.REVIEW_MAX_CONCURRENCY }}
         with:

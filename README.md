@@ -22,7 +22,8 @@ Revisa archivos de tu repo con un modelo **Ollama** y genera:
 - Publica el reporte como artefacto y/o en GitHub Pages.
 
 ## Ejemplo de tags version
-```git rm --cached -r .
+```
+git rm --cached -r .
 git reset --hard
 cd action-ollama-codereview
 npm ci
@@ -31,14 +32,15 @@ cd ..
 git add .
 git commit -m "ultimo fix CJS"
 git push
-git tag -a v1.0.12 -m "v1.0.12"
-git push origin v1.0.12
+git tag -a v1.1.0 -m "v1.1.0"
+git push origin v1.1.0
 git tag -fa v1 -m "v1"
 git push origin v1 --force
 ```
 
 # Ejemplo retag
-```git tag -d v1.0.12
+```
+git tag -d v1.0.12
 git push origin :refs/tags/v1.0.12
 git tag -a v1.0.12 -m "v1.0.12"
 git push origin v1.0.12
