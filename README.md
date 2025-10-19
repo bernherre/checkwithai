@@ -40,12 +40,12 @@ git push origin v1 --force
 
 # Ejemplo retag
 ```
-git tag -d v1.3.2
-git push origin :refs/tags/v1.3.2
-git tag -a v1.3.2 -m "v1.3.2"
-git push origin v1.3.2
+git tag -d v1.3.3
+git push origin :refs/tags/v1.3.3
+git tag -a v1.3.3 -m "v1.3.3"
+git push origin v1.3.3
 
 # (opcional) mueve el alias estable
-git tag -fa v1 -m "v1"
-git push origin v1 --force
+git tag -fa v1.3.3 -m "v1.3.3"
+git push origin v1.3.3 --force
 ```  

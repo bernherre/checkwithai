@@ -1,4 +1,4 @@
-name: AI Code Review
+Ôªøname: AI Code Review
 
 on:
   pull_request:
@@ -17,7 +17,7 @@ concurrency:
 env:
   MODEL: qwen2.5-coder:7b
   NO_PROXY: "127.0.0.1,localhost"
-  # Concurrencia dentro de la acciÛn (2-3 suele ir bien)
+  # Concurrencia dentro de la acci√≥n (2-3 suele ir bien)
   REVIEW_MAX_CONCURRENCY: "2"
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
       - name: Setup Ollama
         uses: ai-action/setup-ollama@v1
         with:
-          version: 0.3.14  # opcional, fija versiÛn
+          version: 0.3.14  # opcional, fija versi√≥n
 
       # 2) Cache de modelos para acelerar pulls
       - name: Cache Ollama models
@@ -42,7 +42,7 @@ jobs:
           restore-keys: |
             ollama-${{ runner.os }}-
 
-      # 3) Asegura el modelo y ìcalientaî la API local
+      # 3) Asegura el modelo y ‚Äúcalienta‚Äù la API local
       - name: Pull model
         run: |
           ollama pull "${MODEL}"
@@ -90,10 +90,10 @@ jobs:
         run: |
           echo "Changed count: ${CHANGED_COUNT:-0}"
 
-      # 4) Ejecuta tu acciÛn (PR: solo cambiados; Push: glob)
+      # 4) Ejecuta tu acci√≥n (PR: solo cambiados; Push: glob)
       - name: Run Ollama Code Review (PR changed files)
         if: ${{ github.event_name == 'pull_request' && steps.changed.outputs.count != '0' }}
-        uses: bernherre/checkwithai/action-ollama-codereview@v1.3.4
+        uses: bernherre/checkwithai/action-ollama-codereview@v1
         env:
           REVIEW_MAX_CONCURRENCY: ${{ env.REVIEW_MAX_CONCURRENCY }}
         with:
@@ -123,7 +123,7 @@ jobs:
 
       - name: Run Ollama Code Review (glob fallback)
         if: ${{ github.event_name != 'pull_request' || steps.changed.outputs.count == '0' }}
-        uses: bernherre/checkwithai/action-ollama-codereview@v1.3.4
+        uses: bernherre/checkwithai/action-ollama-codereview@v1
         env:
           REVIEW_MAX_CONCURRENCY: ${{ env.REVIEW_MAX_CONCURRENCY }}
         with:
@@ -160,5 +160,5 @@ jobs:
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           message: |
-            ? Review listo. Descarga el artifact **ollama-review** desde la pestaÒa *Summary* del job.
+            ‚úÖ Review listo. Descarga el artifact **ollama-review** desde la pesta√±a *Summary* del job.
              Si tienes GitHub Pages habilitado para este repo, publica el directorio `ollama-review-report/` y comparte esa URL (https://...github.io/tu-repo/).
