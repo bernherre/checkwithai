@@ -1,11 +1,16 @@
-﻿import * as core from "@actions/core";
-import fg from "fast-glob";
-import fs from "fs";
-import os from "os";
-import path from "path";
+﻿// action-ollama-codereview/index.js  (CommonJS)
+const core = require("@actions/core");
+const fg = require("fast-glob");
+const fs = require("fs");
+const path = require("path");
 
-/* ===== Prompt de sistema (igual a tu versión, con reglas estrictas) ===== */
-const systemPrompt = `You are “Code Review Assistant”, an expert code reviewer with deep knowledge of secure coding, performance, clean code, and language idioms.
+// === Config & utils ===
+const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
+const DEFAULT_MAX_BYTES_PER_FILE = 200_000;
+const DEFAULT_MAX_CONCURRENCY = 2;
+
+const systemPrompt = `
+You are “Code Review Assistant”, an expert code reviewer with deep knowledge of secure coding, performance, clean code, and language idioms.
 
 RULES
 - Output MUST be a JSON array ONLY (no prose, no backticks, no extra keys).
@@ -14,13 +19,28 @@ RULES
 - "line" is a positive integer or a "start-end" string for ranges (e.g., "15-22").
 - Exclude false positives. If NO issues, output [].
 - Prefer concrete, minimal fixes. Provide small, self-contained code in "solution".
-- Consider: security, performance, style/readability, logic errors, edge cases, platform best practices, error handling, concurrency, input validation.
-- Spanish output.
+- Consider: security (injections, secrets, deserialización insegura, SSRF/RCE, XSS/CSRF), performance (complejidad, I/O, memoria), estilo/legibilidad, errores lógicos, edge cases, mejores prácticas de la plataforma, manejo de errores, concurrencia, validación de entradas y contratos.
+- Mantén el lenguaje y términos en español.
 
-FORMAT (array only)
+OUTPUT FORMAT (array only)
 [
-  { "severity": "ALTA", "line": 42, "description": "...", "solution": "...", "explanation": "..." }
-]`;
+  {
+    "severity": "ALTA",
+    "line": 42,
+    "description": "Descripción concisa del problema",
+    "solution": "Código corregido mínimo y funcional",
+    "explanation": "Por qué esta solución es mejor"
+  }
+]
+
+CONTEXTO DEL ARCHIVO
+- Nombre: \${filename}
+- Tipo: \${extension}
+- Contenido:
+\`\`\`\${extension}
+\${content}
+\`\`\`
+Tarea: analiza el archivo y devuelve el JSON con los issues según las reglas.`.trim();
 
 function buildUserPrompt(filename, extension, content) {
     return `Code Review Assistant
@@ -37,185 +57,69 @@ ${content}
 Please analyze this file and return ONLY the JSON array of issues as specified.`;
 }
 
-/* ===== Utils ===== */
-function show(s) { return String(s ?? "").replace(/\r/g, "\\r").replace(/\n/g, "\\n"); }
-function extOf(file) { const e = path.extname(file).replace(".", ""); return e || "txt"; }
-function htmlEscape(s) { return String(s).replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch])); }
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function htmlEscape(s) {
+    return String(s).replace(/[&<>"']/g, ch => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    })[ch]);
+}
+
+function severityToCommand(sev = "") {
+    const s = (sev || "").toUpperCase();
+    if (s === "CRÍTICA") return "error";
+    if (s === "ALTA" || s === "MEDIA") return "warning";
+    return "notice";
+}
+
 function firstLine(lineField) {
     if (typeof lineField === "number") return lineField;
-    if (typeof lineField === "string") { const m = lineField.match(/^(\d+)(?:\s*-\s*\d+)?$/); if (m) return parseInt(m[1], 10); }
+    if (typeof lineField === "string") {
+        const m = lineField.match(/^(\d+)(?:\s*-\s*\d+)?$/);
+        if (m) return parseInt(m[1], 10);
+    }
     return undefined;
 }
-function severityToCommand(sev = "") { const s = (sev || "").toUpperCase(); if (s === "CRÍTICA") return "error"; if (s === "ALTA" || s === "MEDIA") return "warning"; return "notice"; }
-function uniqKeepOrder(arr) { const seen = new Set(); const out = []; for (const x of arr) { if (!seen.has(x)) { seen.add(x); out.push(x); } } return out; }
-function truncateByBytes(str, maxBytes) {
-    const buf = Buffer.from(str, "utf8");
-    if (buf.length <= maxBytes) return str;
-    return buf.subarray(0, maxBytes).toString("utf8") + "\n\n/* [Truncado por límite de tamaño] */\n";
-}
-function safeParseJsonArray(txt, fallback = []) {
-    const tryParse = s => { try { const j = JSON.parse(s.trim()); return Array.isArray(j) ? j : null; } catch { return null; } };
-    let res = tryParse(txt); if (res) return res;
-    const m = txt.match(/```json([\s\S]*?)```/i) || txt.match(/```([\s\S]*?)```/i);
-    if (m?.[1]) { res = tryParse(m[1]); if (res) return res; }
-    const i = txt.indexOf("["), j = txt.lastIndexOf("]");
-    if (i !== -1 && j !== -1 && j > i) { res = tryParse(txt.slice(i, j + 1)); if (res) return res; }
-    return fallback;
-}
 
-/* ===== UI (HTML / anotaciones / summary.md) ===== */
-function generateHtmlReport(results) {
-    const totalIssues = results.reduce((a, r) => a + (r.issues?.length || 0), 0);
-    const criticas = results.flatMap(r => (r.issues || []).filter(i => (i.severity || "").toUpperCase() === "CRÍTICA"));
-    const rows = results.map(r => {
-        const items = (r.issues || []).map((i, idx) => `
-      <tr>
-        <td>${idx + 1}</td>
-        <td><code>${htmlEscape(r.file)}</code></td>
-        <td>${htmlEscape(i.severity || "")}</td>
-        <td>${htmlEscape(String(i.line ?? ""))}</td>
-        <td>${htmlEscape(i.description || "")}</td>
-        <td><pre>${htmlEscape(i.solution || "")}</pre></td>
-        <td>${htmlEscape(i.explanation || "")}</td>
-      </tr>`).join("");
-        return items || `
-      <tr>
-        <td>–</td><td><code>${htmlEscape(r.file)}</code></td>
-        <td colspan="5"><em>Sin hallazgos</em></td>
-      </tr>`;
-    }).join("");
-    return `<!doctype html>
-<html lang="es"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Ollama Code Review</title>
-<style>
-body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Arial,sans-serif;margin:24px}
-h1{margin:0 0 8px}.summary{margin:8px 0 16px}
-table{border-collapse:collapse;width:100%}th,td{border:1px solid #ddd;padding:8px;vertical-align:top}
-th{background:#f7f7f7;text-align:left}pre{white-space:pre-wrap;margin:0}
-.tag{display:inline-block;padding:2px 8px;border-radius:999px;background:#eee;margin-right:6px;font-size:12px}
-.crit{background:#ffe5e5;color:#900}
-</style>
-</head><body>
-<h1>Ollama Code Review</h1>
-<div class="summary">
-  <span class="tag">Archivos: ${results.length}</span>
-  <span class="tag">Issues: ${totalIssues}</span>
-  <span class="tag ${criticas.length ? "crit" : ""}">CRÍTICAS: ${criticas.length}</span>
-  <a class="tag" href="./report.json" download>Descargar JSON</a>
-</div>
-<table><thead>
-  <tr><th>#</th><th>Archivo</th><th>Severidad</th><th>Línea(s)</th><th>Descripción</th><th>Solución</th><th>Explicación</th></tr>
-</thead><tbody>${rows}</tbody></table>
-</body></html>`;
-}
-
-function generateMarkdownSummary(results, maxItems = 60) {
-    const counts = { CRÍTICA: 0, ALTA: 0, MEDIA: 0, BAJA: 0 }; const flat = [];
-    for (const r of results) {
-        for (const i of (r.issues || [])) {
-            const sev = (i.severity || "").toUpperCase();
-            if (counts[sev] !== undefined) counts[sev]++;
-            flat.push({ file: r.file, ...i });
-        }
-    }
-    const header = [
-        `# 🧠 Ollama Code Review`,
-        ``,
-        `**Archivos:** ${results.length}  |  **Issues:** ${flat.length}`,
-        `- CRÍTICA: ${counts["CRÍTICA"]}  |  ALTA: ${counts["ALTA"]}  |  MEDIA: ${counts["MEDIA"]}  |  BAJA: ${counts["BAJA"]}`,
-        ``
-    ].join("\n");
-    if (flat.length === 0) return header + `✅ Sin hallazgos.\n`;
-
-    const lines = flat.slice(0, maxItems).map((i, idx) => {
-        const sev = i.severity || "";
-        const ln = i.line ?? "";
-        const desc = i.description || "";
-        const sol = i.solution ? `\n  - _Fix:_\n\n    \`\`\`\n${i.solution}\n    \`\`\`` : "";
-        const exp = i.explanation ? `\n  - _Por qué:_ ${i.explanation}` : "";
-        return `**${idx + 1}. [${sev}]** \`${i.file}:${ln}\` — ${desc}${sol}${exp}`;
+// Minimal limiter (sin deps)
+function createLimiter(max = DEFAULT_MAX_CONCURRENCY) {
+    let active = 0;
+    const queue = [];
+    const next = () => {
+        if (active >= max) return;
+        const job = queue.shift();
+        if (!job) return;
+        active++;
+        job().finally(() => { active--; next(); });
+    };
+    return fn => new Promise((resolve, reject) => {
+        queue.push(() => fn().then(resolve, reject));
+        next();
     });
-    const tail = flat.length > maxItems ? `\n> _Mostrando ${maxItems} de ${flat.length} issues._` : "";
-    return [header, ...lines, tail, `\n_Artefacto: **ollama-review** (HTML/JSON)._`].join("\n");
 }
 
-function emitAnnotations(results) {
-    for (const r of results) {
-        for (const i of (r.issues || [])) {
-            const cmd = severityToCommand(i.severity);
-            const line = firstLine(i.line);
-            const loc = []; if (r.file) loc.push(`file=${r.file}`); if (line) loc.push(`line=${line}`);
-            const header = loc.length ? `${cmd} ${loc.join(",")}` : cmd;
-            const msg = `${i.description || "Issue"}${i.explanation ? ` — ${i.explanation}` : ""}`;
-            console.log(`::${header}::${msg}`);
-        }
-    }
-}
-
-function writeStepSummary(md) {
-    const p = process.env.GITHUB_STEP_SUMMARY;
-    if (p) fs.appendFileSync(p, md + "\n");
-}
-
-/* ===== Files ===== */
-function negativePatternsFromExclude(exclude_glob) {
-    if (!exclude_glob) return [];
-    const lines = String(exclude_glob).split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-    return lines.map(p => (p.startsWith("!") ? p : `!${p}`));
-}
-
-async function resolveFiles({ file_list_path, file_list, file_glob, exclude_glob }) {
-    let files = [];
-    if (file_list_path) {
-        try {
-            const raw = fs.readFileSync(file_list_path, "utf8");
-            files = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-            core.info(`[debug] using file_list_path (${files.length})`);
-        } catch { core.warning(`No se pudo leer file_list_path: ${file_list_path}`); }
-    }
-    if (files.length === 0 && file_list) {
-        files = file_list.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-        core.info(`[debug] using file_list (${files.length})`);
-    }
-    if (files.length === 0) {
-        const negs = negativePatternsFromExclude(exclude_glob);
-        const defaultNegs = [
-            "!**/node_modules/**", "!**/dist/**", "!**/build/**", "!**/.next/**", "!**/coverage/**",
-            "!**/ollama-review-report/**", "!**/.git/**",
-            "!**/*.png", "!**/*.jpg", "!**/*.jpeg", "!**/*.gif", "!**/*.webp", "!**/*.pdf", "!**/*.zip", "!**/*.ico", "!**/*.wasm", "!**/*.exe", "!**/*.dll", "!**/*.so",
-            "!**/*.lock", "!package-lock.json", "!yarn.lock", "!pnpm-lock.yaml"
-        ];
-        const patterns = [file_glob, ...defaultNegs, ...negs];
-        core.info(`[debug] glob.patterns="${show(patterns.join(" | "))}"`);
-        files = await fg(patterns, { dot: true });
-    } else {
-        const bin = /\.(png|jpg|jpeg|gif|webp|pdf|zip|ico|wasm|exe|dll|so)$/i;
-        files = uniqKeepOrder(files.filter(f => f && !bin.test(f) && fs.existsSync(f) && fs.statSync(f).isFile()));
-    }
-    return files;
-}
-
-/* ===== Ollama ===== */
-async function callOllamaChat(serverUrl, model, userPrompt, timeoutMs) {
+// === Ollama call + parsing ===
+async function callOllamaChat({ serverUrl, model, userPrompt, requestTimeoutMs, ollamaOpts = {}, attempt = 1, maxAttempts = 3 }) {
     const url = `${serverUrl.replace(/\/$/, "")}/api/chat`;
+    const body = {
+        model,
+        stream: false,
+        options: filterOllamaOptions(ollamaOpts),
+        messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt }
+        ]
+    };
+
     const ac = new AbortController();
-    const to = setTimeout(() => ac.abort(), timeoutMs);
+    const to = setTimeout(() => ac.abort(), requestTimeoutMs || DEFAULT_REQUEST_TIMEOUT_MS);
+
     try {
-        const res = await fetch(url, {
+        const res = await (globalThis.fetch || require("node-fetch"))(url, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                model,
-                stream: false,
-                keep_alive: "10m",
-                options: globalThis.__OLLAMA_OPTIONS__ || {},
-                messages: [
-                    { role: "system", content: systemPrompt },
-                    { role: "user", content: userPrompt }
-                ]
-            }),
-            signal: ac.signal
+            body: JSON.stringify(body),
+            signal: ac.signal,
         });
         clearTimeout(to);
         if (!res.ok) {
@@ -224,79 +128,330 @@ async function callOllamaChat(serverUrl, model, userPrompt, timeoutMs) {
         }
         const data = await res.json();
         return data?.message?.content ?? "";
-    } finally { clearTimeout(to); }
+    } catch (err) {
+        clearTimeout(to);
+        // Anti “fetch failed” → reintentos exponenciales + jitter
+        if (attempt < maxAttempts) {
+            const backoff = (1000 * Math.pow(2, attempt - 1)) + Math.floor(Math.random() * 400);
+            core.warning(`[retry] intento ${attempt} falló (${err.message || err}); reintentando en ${backoff}ms`);
+            await sleep(backoff);
+            return callOllamaChat({ serverUrl, model, userPrompt, requestTimeoutMs, ollamaOpts, attempt: attempt + 1, maxAttempts });
+        }
+        throw err;
+    }
 }
 
-/* ===== Programa principal ===== */
+function filterOllamaOptions(opts) {
+    const out = {};
+    if (!opts) return out;
+    // mapea nombres del input a opciones de Ollama
+    if (opts.num_predict != null) out.num_predict = Number(opts.num_predict);
+    if (opts.num_ctx != null) out.num_ctx = Number(opts.num_ctx);
+    if (opts.temperature != null) out.temperature = Number(opts.temperature);
+    if (opts.threads != null) out.num_gpu ??= undefined; // reservado
+    return out;
+}
+
+function safeParseJsonArray(txt, fallback = []) {
+    const tryParse = (s) => {
+        try {
+            const parsed = JSON.parse(String(s).trim());
+            return Array.isArray(parsed) ? parsed : null;
+        } catch { return null; }
+    };
+
+    let result = tryParse(txt);
+    if (result) return result;
+
+    const m = String(txt).match(/```json([\s\S]*?)```/i) || String(txt).match(/```([\s\S]*?)```/i);
+    if (m?.[1]) {
+        result = tryParse(m[1]);
+        if (result) return result;
+    }
+    const b = String(txt).indexOf("[");
+    const e = String(txt).lastIndexOf("]");
+    if (b !== -1 && e !== -1 && e > b) {
+        result = tryParse(String(txt).slice(b, e + 1));
+        if (result) return result;
+    }
+    return fallback;
+}
+
+// === Reporting ===
+function emitAnnotations(results) {
+    for (const r of results) {
+        for (const i of r.issues) {
+            const cmd = severityToCommand(i.severity);
+            const line = firstLine(i.line);
+            const loc = [];
+            if (r.file) loc.push(`file=${r.file}`);
+            if (line) loc.push(`line=${line}`);
+            const header = loc.length ? `${cmd} ${loc.join(",")}` : cmd;
+            const msg = `${i.description || "Issue"}${i.explanation ? ` — ${i.explanation}` : ""}`;
+            console.log(`::${header}::${msg}`);
+        }
+    }
+}
+
+function writeStepSummary(results) {
+    const totalFiles = results.length;
+    const counts = { "CRÍTICA": 0, "ALTA": 0, "MEDIA": 0, "BAJA": 0 };
+    let totalIssues = 0;
+    for (const r of results) {
+        for (const i of r.issues) {
+            const sev = (i.severity || "").toUpperCase();
+            if (counts[sev] !== undefined) counts[sev]++;
+            totalIssues++;
+        }
+    }
+    const summary = [
+        `# 🧠 Ollama Code Review`,
+        ``,
+        `**Archivos analizados:** ${totalFiles}  |  **Issues totales:** ${totalIssues}`,
+        ``,
+        `- CRÍTICA: ${counts["CRÍTICA"]}`,
+        `- ALTA: ${counts["ALTA"]}`,
+        `- MEDIA: ${counts["MEDIA"]}`,
+        `- BAJA: ${counts["BAJA"]}`,
+        ``,
+        `Artefacto/Pages: **ollama-review-report** (index.html, report.json).`,
+    ].join("\n");
+
+    const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+    if (summaryPath) fs.appendFileSync(summaryPath, summary + "\n");
+}
+
+function generateHtmlReport(results) {
+    const totalIssues = results.reduce((acc, r) => acc + r.issues.length, 0);
+    const criticas = results.flatMap(r => r.issues.filter(i => (i.severity || "").toUpperCase() === "CRÍTICA"));
+
+    const rows = results.map(r => {
+        const items = r.issues.map((i, idx) => `
+      <tr>
+        <td>${idx + 1}</td>
+        <td><code>${htmlEscape(r.file)}</code></td>
+        <td>${htmlEscape(i.severity || "")}</td>
+        <td>${htmlEscape(String(i.line ?? ""))}</td>
+        <td>${htmlEscape(i.description || "")}</td>
+        <td><pre>${htmlEscape(i.solution || "")}</pre></td>
+        <td>${htmlEscape(i.explanation || "")}</td>
+      </tr>
+    `).join("");
+        return items || `
+      <tr>
+        <td>–</td><td><code>${htmlEscape(r.file)}</code></td>
+        <td colspan="5"><em>Sin hallazgos</em></td>
+      </tr>
+    `;
+    }).join("");
+
+    return `<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Ollama Code Review</title>
+<style>
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Arial, sans-serif; margin: 24px; }
+  h1 { margin: 0 0 8px; }
+  .summary { margin: 8px 0 16px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid #ddd; padding: 8px; vertical-align: top; }
+  th { background: #f7f7f7; text-align: left; }
+  pre { white-space: pre-wrap; margin: 0; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #eee; margin-right: 6px; font-size: 12px; }
+  .crit { background: #ffe5e5; color: #900; }
+  a.tag { text-decoration: none; color: inherit; }
+</style>
+</head>
+<body>
+  <h1>Ollama Code Review</h1>
+  <div class="summary">
+    <span class="tag">Archivos: ${results.length}</span>
+    <span class="tag">Issues totales: ${totalIssues}</span>
+    <span class="tag ${criticas.length ? "crit" : ""}">CRÍTICAS: ${criticas.length}</span>
+    <a class="tag" href="./report.json" download>Descargar JSON</a>
+  </div>
+  <table>
+    <thead>
+      <tr>
+        <th>#</th><th>Archivo</th><th>Severidad</th><th>Línea(s)</th><th>Descripción</th><th>Solución</th><th>Explicación</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows}
+    </tbody>
+  </table>
+</body>
+</html>`;
+}
+
+// === File resolution & reading ===
+function extOf(file) {
+    const e = path.extname(file).replace(".", "");
+    return e || "txt";
+}
+
+function uniqKeepOrder(arr) {
+    const seen = new Set();
+    const out = [];
+    for (const x of arr) { if (!seen.has(x)) { seen.add(x); out.push(x); } }
+    return out;
+}
+
+async function resolveFiles({ file_list_path, file_list, file_glob, exclude_glob }) {
+    let files = [];
+
+    if (file_list_path) {
+        try {
+            const raw = fs.readFileSync(file_list_path, "utf8");
+            files = raw.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+        } catch {
+            core.warning(`No se pudo leer file_list_path: ${file_list_path}`);
+        }
+    }
+
+    if (files.length === 0 && file_list) {
+        files = file_list.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    }
+
+    if (files.length === 0) {
+        const patterns = [
+            file_glob,
+            // exclusiones user
+            ...(String(exclude_glob || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean).map(p => `!${p}`)),
+            // exclusiones por defecto
+            "!**/.git/**",
+            "!**/*.png", "!**/*.jpg", "!**/*.jpeg", "!**/*.gif", "!**/*.webp",
+            "!**/*.pdf", "!**/*.zip", "!**/*.ico", "!**/*.wasm", "!**/*.exe", "!**/*.dll", "!**/*.so"
+        ];
+        files = await fg(patterns, { dot: true });
+    } else {
+        const binRegex = /\.(png|jpg|jpeg|gif|webp|pdf|zip|ico|wasm|exe|dll|so)$/i;
+        files = files.filter(f => f && !binRegex.test(f) && fs.existsSync(f) && fs.statSync(f).isFile());
+        files = uniqKeepOrder(files);
+    }
+
+    return files;
+}
+
+function readTextFileCapped(file, maxBytes) {
+    try {
+        const stat = fs.statSync(file);
+        const cap = Math.max(0, Number(maxBytes) || DEFAULT_MAX_BYTES_PER_FILE);
+        if (stat.size <= cap) {
+            return { text: fs.readFileSync(file, "utf8"), truncated: false, bytes: stat.size };
+        }
+        const fd = fs.openSync(file, "r");
+        const buf = Buffer.allocUnsafe(cap);
+        fs.readSync(fd, buf, 0, cap, 0);
+        fs.closeSync(fd);
+        const note = `\n\n/* [AVISO] Contenido truncado a ${cap} bytes de ${stat.size} */\n`;
+        return { text: buf.toString("utf8") + note, truncated: true, bytes: cap };
+    } catch {
+        return { text: "", truncated: false, bytes: 0, err: true };
+    }
+}
+
+// === Main ===
 async function run() {
     try {
-        const model = core.getInput("model");
-        const serverUrl = core.getInput("server_url");
-        const file_glob = core.getInput("file_glob");
-        const exclude_glob = core.getInput("exclude_glob");
-        const file_list = core.getInput("file_list");
-        const file_list_path = core.getInput("file_list_path");
-        const failOnCritica = core.getInput("fail_on_critica") === "true";
-        const retentionDays = parseInt(core.getInput("retention_days"), 10) || 7;
+        // Inputs
+        const model = core.getInput("model", { required: true });
+        const serverUrl = core.getInput("server_url", { required: true });
+        const file_glob = core.getInput("file_glob") || "**/*.{ts,tsx,js,jsx,py,cs,java,go,rs}";
+        const exclude_glob = core.getInput("exclude_glob") || "";
+        const file_list = core.getInput("file_list") || "";
+        const file_list_path = core.getInput("file_list_path") || "";
+        const failOnCritica = (core.getInput("fail_on_critica") || "").toLowerCase() === "true";
+        const retentionDays = parseInt(core.getInput("retention_days") || "7", 10) || 7;
 
-        const requestTimeoutMs = parseInt(core.getInput("request_timeout_ms") || "300000", 10);
-        const maxBytesPerFile = parseInt(core.getInput("max_bytes_per_file") || "200000", 10);
-        const numPredict = parseInt(core.getInput("ollama_num_predict") || "256", 10);
-        const numCtx = parseInt(core.getInput("ollama_num_ctx") || "1536", 10);
-        const temperature = parseFloat(core.getInput("ollama_temperature") || "0");
-        const maxConc = parseInt(core.getInput("review_max_concurrency") || "1", 10);
+        const requestTimeoutMs = parseInt(core.getInput("request_timeout_ms") || `${DEFAULT_REQUEST_TIMEOUT_MS}`, 10);
+        const maxBytesPerFile = parseInt(core.getInput("max_bytes_per_file") || `${DEFAULT_MAX_BYTES_PER_FILE}`, 10);
+        const num_predict = core.getInput("ollama_num_predict") || core.getInput("num_predict");
+        const num_ctx = core.getInput("ollama_num_ctx") || core.getInput("num_ctx");
+        const temperature = core.getInput("ollama_temperature") || core.getInput("temperature");
+        const reviewMaxConcurrency = parseInt(core.getInput("review_max_concurrency") || process.env.REVIEW_MAX_CONCURRENCY || `${DEFAULT_MAX_CONCURRENCY}`, 10);
 
-        const cpuThreads = Math.max(2, (os.cpus()?.length || 2) - 1);
-        globalThis.__OLLAMA_OPTIONS__ = { temperature, num_predict: numPredict, num_ctx: numCtx, num_thread: cpuThreads };
-
-        core.info(`[inputs] model="${show(model)}" server_url="${show(serverUrl)}"`);
-        core.info(`[inputs] file_glob="${show(file_glob)}"`);
-        core.info(`[inputs] exclude_glob="${show(exclude_glob)}"`);
-        core.info(`[inputs] request_timeout_ms=${requestTimeoutMs} max_bytes_per_file=${maxBytesPerFile} num_predict=${numPredict} num_ctx=${numCtx} threads=${cpuThreads} conc=${maxConc}`);
+        core.info(`[inputs] model="${model}" server_url="${serverUrl}"`);
+        core.info(`[inputs] file_glob="${file_glob}"`);
+        core.info(`[inputs] exclude_glob="${exclude_glob.replace(/\n/g, "\\n")}"`);
+        core.info(`[inputs] file_list_path="${file_list_path}"`);
+        core.info(`[inputs] file_list(len=${file_list.length})="${file_list ? "[...]" : ""}"`);
+        core.info(`[inputs] request_timeout_ms=${requestTimeoutMs} max_bytes_per_file=${maxBytesPerFile} num_predict=${num_predict || ""} num_ctx=${num_ctx || ""} temperature=${temperature || ""} max_concurrency=${reviewMaxConcurrency}`);
 
         const files = await resolveFiles({ file_list_path, file_list, file_glob, exclude_glob });
         core.info(`[debug] files.count=${files.length}`);
-        if (files.length) core.info(`[debug] files.preview=${show(files.slice(0, 20).join(", "))}`);
-        if (files.length === 0) core.warning("No se encontraron archivos a revisar.");
+        core.info(`[debug] files.preview(<=20)=${files.slice(0, 20).join(", ")}`);
 
-        const results = [];
-        for (const file of files) {
-            let content = "";
-            try { content = fs.readFileSync(file, "utf8"); }
-            catch { core.warning(`No se pudo leer como texto: ${file}`); continue; }
-            const extension = extOf(file);
-            const prompt = buildUserPrompt(file, extension, truncateByBytes(content, maxBytesPerFile));
-            const raw = await callOllamaChat(serverUrl, model, prompt, requestTimeoutMs);
-            const issues = safeParseJsonArray(raw, []);
-            results.push({ file, issues });
+        if (files.length === 0) {
+            core.warning("No se encontraron archivos a revisar.");
         }
 
-        // Reportes
+        const limiter = createLimiter(Math.max(1, reviewMaxConcurrency));
+        const results = [];
+        let idx = 0;
+
+        const tasks = files.map(file => limiter(async () => {
+            const ext = extOf(file);
+            const { text, truncated, err, bytes } = readTextFileCapped(file, maxBytesPerFile);
+            if (err) { core.warning(`No se pudo leer como texto: ${file}`); return; }
+
+            core.info(`[file] ${file} size=${bytes}B used=${Math.min(bytes, maxBytesPerFile)}B${truncated ? " [truncated]" : ""}`);
+            const prompt = buildUserPrompt(file, ext, text);
+            // opciones de ollama
+            const ollamaOpts = {
+                num_predict: num_predict ? Number(num_predict) : undefined,
+                num_ctx: num_ctx ? Number(num_ctx) : undefined,
+                temperature: temperature ? Number(temperature) : undefined,
+            };
+            const started = Date.now();
+            let raw;
+            try {
+                raw = await callOllamaChat({
+                    serverUrl,
+                    model,
+                    userPrompt: prompt,
+                    requestTimeoutMs,
+                    ollamaOpts
+                });
+            } catch (e) {
+                core.warning(`[file] ${file} request failed: ${e.message || e}`);
+                results.push({ file, issues: [] });
+                return;
+            } finally {
+                const elapsed = Date.now() - started;
+                core.info(`[file] ${file} elapsed=${elapsed}ms`);
+            }
+            const issues = safeParseJsonArray(raw, []);
+            results.push({ file, issues });
+        }));
+
+        // Espera a todas las tareas
+        for (const t of tasks) { await t; }
+
+        // Genera salida web
         const outDir = path.join(process.cwd(), "ollama-review-report");
         fs.mkdirSync(outDir, { recursive: true });
         fs.writeFileSync(path.join(outDir, "report.json"), JSON.stringify(results, null, 2));
         fs.writeFileSync(path.join(outDir, "index.html"), generateHtmlReport(results));
-        const summaryMd = generateMarkdownSummary(results, 60);
-        fs.writeFileSync(path.join(outDir, "summary.md"), summaryMd);
-
         core.info(`Reporte generado en ${outDir}`);
 
         // UI
         emitAnnotations(results);
-        writeStepSummary(summaryMd);
+        writeStepSummary(results);
 
         // Outputs
         core.setOutput("report_dir", outDir);
-        core.setOutput("summary_md_path", path.join(outDir, "summary.md"));
         core.setOutput("retention_days", retentionDays.toString());
 
-        // Gate
-        const anyCritica = results.some(r => r.issues?.some(i => (i.severity || "").toUpperCase() === "CRÍTICA"));
+        // Gate por CRÍTICA
+        const anyCritica = results.some(r => r.issues.some(i => (i.severity || "").toUpperCase() === "CRÍTICA"));
         if (failOnCritica && anyCritica) {
             core.setFailed("Se encontraron issues con severidad CRÍTICA.");
         }
     } catch (err) {
-        core.setFailed(err?.message || String(err));
+        core.setFailed(err.message || String(err));
     }
 }
 
