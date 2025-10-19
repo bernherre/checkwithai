@@ -2,3 +2,5 @@ node_modules/
 ollama-review-report/
 .vs/
 .github/workflows/selfhosted.yml
+.github/workflows/ai-review-no-doocckkeer.yml
+.github/workflows/ai-review-reusable.yml

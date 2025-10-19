@@ -29,19 +29,19 @@ npm ci
 npm run build
 cd ..
 git add .
-git commit -m "fix: recursive excludes and default negs in glob"
+git commit -m "add chat results"
 git push
-git tag -a v1.0.10 -m "v1.0.10"
-git push origin v1.0.10
+git tag -a v1.0.11 -m "v1.0.11"
+git push origin v1.0.11
 git tag -fa v1 -m "v1"
 git push origin v1 --force
 ```
 
 # Ejemplo retag
-```git tag -d v1.0.6
-git push origin :refs/tags/v1.0.6
-git tag -a v1.0.6 -m "v1.0.6"
-git push origin v1.0.6
+```git tag -d v1.0.11
+git push origin :refs/tags/v1.0.11
+git tag -a v1.0.11 -m "v1.0.11"
+git push origin v1.0.11
 
 # (opcional) mueve el alias estable
 git tag -fa v1 -m "v1"

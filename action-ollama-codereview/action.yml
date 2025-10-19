@@ -1,9 +1,10 @@
 ﻿name: "Ollama Code Review"
-description: "Revisa código con Ollama y genera reporte web + JSON + anotaciones."
-author: "bernherre"
+description: "Revisa archivos de código con un LLM local (Ollama) y genera reportes."
+author: "tu-usuario"
+
 inputs:
   model:
-    description: "Modelo Ollama (ej: qwen2.5-coder:7b)"
+    description: "Modelo Ollama (p.ej. qwen2.5-coder:7b)"
     required: true
     default: "qwen2.5-coder:7b"
   server_url:
@@ -12,13 +13,20 @@ inputs:
     default: "http://127.0.0.1:11434"
 
   file_glob:
-    description: "Glob de archivos (fallback)"
+    description: "Patrón glob fallback para elegir archivos"
     required: false
-    default: "**/*"
+    default: "**/*.{ts,tsx,js,jsx,py,cs,java,go,rs}"
   exclude_glob:
     description: "Patrones de exclusión (multilínea)"
     required: false
-    default: ""
+    default: |
+      **/node_modules/**
+      **/dist/**
+      **/build/**
+      **/.next/**
+      **/coverage/**
+      **/ollama-review-report/**
+      **/.git/**
   file_list:
     description: "Lista de archivos (multilínea)"
     required: false
@@ -29,7 +37,7 @@ inputs:
     default: ""
 
   fail_on_critica:
-    description: "Fallar si hay issues CRÍTICA"
+    description: "Falla si hay al menos una CRÍTICA"
     required: false
     default: "true"
   retention_days:
@@ -37,7 +45,7 @@ inputs:
     required: false
     default: "7"
 
-  # Resiliencia / performance
+  # Perf / resiliencia
   request_timeout_ms:
     description: "Timeout por archivo (ms)"
     required: false
@@ -45,28 +53,34 @@ inputs:
   max_bytes_per_file:
     description: "Máximo de bytes por archivo (truncado)"
     required: false
-    default: "307200"
+    default: "200000"
   ollama_num_predict:
-    description: "Tokens de salida (num_predict)"
+    description: "Tokens de salida"
     required: false
-    default: "512"
+    default: "256"
   ollama_num_ctx:
-    description: "Contexto (num_ctx)"
+    description: "Contexto"
     required: false
-    default: "2048"
+    default: "1536"
   ollama_temperature:
     description: "Temperatura"
     required: false
     default: "0"
   review_max_concurrency:
-    description: "Máximo de archivos procesados en paralelo"
+    description: "Archivos en paralelo"
     required: false
-    default: "2"
+    default: "1"
 
 runs:
   using: "node20"
   main: "dist/index.js"
 
+outputs:
+  report_dir:
+    description: "Directorio donde se generó el reporte"
+  summary_md_path:
+    description: "Ruta al resumen Markdown para comentar en PR/commit"
+
 branding:
   color: "blue"
-  icon: "shield"
+  icon: "search"
