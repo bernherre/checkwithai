@@ -31,17 +31,17 @@ cd ..
 git add .
 git commit -m "ultimo fix CJS"
 git push
-git tag -a v1.0.11 -m "v1.0.11"
-git push origin v1.0.11
+git tag -a v1.0.12 -m "v1.0.12"
+git push origin v1.0.12
 git tag -fa v1 -m "v1"
 git push origin v1 --force
 ```
 
 # Ejemplo retag
-```git tag -d v1.0.11
-git push origin :refs/tags/v1.0.11
-git tag -a v1.0.11 -m "v1.0.11"
-git push origin v1.0.11
+```git tag -d v1.0.12
+git push origin :refs/tags/v1.0.12
+git tag -a v1.0.12 -m "v1.0.12"
+git push origin v1.0.12
 
 # (opcional) mueve el alias estable
 git tag -fa v1 -m "v1"

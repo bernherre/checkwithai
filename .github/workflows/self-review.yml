@@ -76,7 +76,8 @@ jobs:
 
       - name: Debug changed count
         if: ${{ github.event_name == 'pull_request' }}
-        run: echo "Changed count: ${{ steps.changed.outputs.count || '0' }}"
+        run: |
+            echo "Changed count: ${{ steps.changed.outputs.count || '0' }}"
 
       # --- PR con cambiados → lista ---
       - name: Run Ollama Code Review (PR changed files)
