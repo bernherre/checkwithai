@@ -29,7 +29,7 @@ npm ci
 npm run build
 cd ..
 git add .
-git commit -m "add chat results"
+git commit -m "ultimo fix CJS"
 git push
 git tag -a v1.0.11 -m "v1.0.11"
 git push origin v1.0.11

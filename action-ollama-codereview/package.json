@@ -1,12 +1,12 @@
 {
   "name": "action-ollama-codereview",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "private": true,
   "type": "commonjs",
   "main": "dist/index.cjs",
   "engines": { "node": ">=20" },
   "scripts": {
-    "build": "ncc build index.js -o dist -m && node -e \"require('fs').renameSync('dist/index.js','dist/index.cjs')\"",
+    "build": "node ./scripts/build-esbuild.cjs",
     "clean": "rimraf dist node_modules"
   },
   "dependencies": {
@@ -14,7 +14,7 @@
     "fast-glob": "3.3.2"
   },
   "devDependencies": {
-    "@vercel/ncc": "0.38.1",
+    "esbuild": "0.23.1",
     "rimraf": "5.0.7"
   }
 }
