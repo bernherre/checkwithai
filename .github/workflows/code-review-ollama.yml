@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: write           # <--- necesita write para comentar en commits
   pull-requests: write
 
 concurrency:
@@ -17,7 +17,7 @@ concurrency:
 env:
   MODEL: qwen2.5-coder:7b
   NO_PROXY: "127.0.0.1,localhost"
-  REVIEW_MAX_CONCURRENCY: "1"   # súbelo a 2 cuando esté estable
+  REVIEW_MAX_CONCURRENCY: "1"
 
 jobs:
   review:
@@ -77,7 +77,7 @@ jobs:
       - name: Debug changed count
         if: ${{ github.event_name == 'pull_request' }}
         run: |
-          echo "Changed count: ${{ steps.changed.outputs.count || '0' }}"
+            echo "Changed count: ${{ steps.changed.outputs.count || '0' }}"
 
       # --- PR con cambiados → lista ---
       - name: Run Ollama Code Review (PR changed files)
@@ -159,8 +159,12 @@ jobs:
           script: |
             const fs = require('fs');
             const p = process.env.SUMMARY_PATH;
+            if (!p || !fs.existsSync(p)) {
+              core.setFailed(`Summary file not found at: ${p || '(empty)'}`);
+              return;
+            }
             const body = fs.readFileSync(p, 'utf8');
-            await github.repos.createCommitComment({
+            await github.rest.repos.createCommitComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               commit_sha: context.sha,
@@ -174,5 +178,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ollama-review
-          path: ollama-review-report/**
+          path: |
+            ollama-review-report/index.html
+            ollama-review-report/report.json
+            ollama-review-report/summary.md
           retention-days: 7
