@@ -1,0 +1,64 @@
+name: Manual Release (bump + tag)
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Tipo de bump (patch|minor|major)'
+        required: true
+        default: 'patch'
+
+permissions:
+  contents: write
+
+jobs:
+  bump-and-tag:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Read current version
+        id: ver
+        run: |
+          CURR=$(jq -r '.version' package.json)
+          echo "current=$CURR" >> $GITHUB_OUTPUT
+
+      - name: Bump version
+        id: bump
+        run: |
+          BUMP="${{ github.event.inputs.bump }}"
+          npm version "$BUMP" --no-git-tag-version
+          NEWV=$(jq -r '.version' package.json)
+          echo "new=$NEWV" >> $GITHUB_OUTPUT
+
+      - name: Commit version bump
+        run: |
+          git add package.json package-lock.json || true
+          git commit -m "chore(release): v${{ steps.bump.outputs.new }}"
+
+      - name: Tag and push
+        run: |
+          TAG="v${{ steps.bump.outputs.new }}"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin HEAD:main --follow-tags
+
+      - name: Move floating major tag (v1, v2, ...)
+        run: |
+          MAJOR=$(echo "${{ steps.bump.outputs.new }}" | cut -d. -f1)
+          F="v$MAJOR"
+          git tag -f "$F" "$TAG"
+          git push origin -f "$F"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.bump.outputs.new }}
+          generate_release_notes: true

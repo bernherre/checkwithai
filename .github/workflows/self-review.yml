@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 concurrency:
@@ -159,9 +159,19 @@ jobs:
         with:
           script: |
             const fs = require('fs');
+
             const p = process.env.SUMMARY_PATH;
-            const body = fs.readFileSync(p, 'utf8');
-            await github.repos.createCommitComment({
+            if (!p || !fs.existsSync(p)) {
+              core.warning(`Summary not found at: ${p}`);
+              return;
+            }
+             const body = fs.readFileSync(p, 'utf8').trim();
+            if (!body) {
+              core.warning('Empty summary body; skipping commit comment.');
+              return;
+            }
+
+            await github.rest.repos.createCommitComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               commit_sha: context.sha,
@@ -169,6 +179,7 @@ jobs:
             });
         env:
           SUMMARY_PATH: ${{ steps.review_fb.outputs.summary_md_path }}
+
 
       # --- Artefacto con HTML/JSON/MD ---
       - name: Upload review artifact

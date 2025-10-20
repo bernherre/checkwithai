@@ -225,6 +225,11 @@ function writeStepSummary(results) {
 
     const summaryPath = process.env.GITHUB_STEP_SUMMARY;
     if (summaryPath) fs.appendFileSync(summaryPath, summary + "\n");
+
+    const summaryMdPath = path.join(outDir, 'summary.md');
+    fs.writeFileSync(summaryMdPath, summary, 'utf8');
+    core.setOutput('summary_md_path', summaryMdPath);
+
 }
 
 function generateHtmlReport(results) {
