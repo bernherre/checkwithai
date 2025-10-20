@@ -156,6 +156,7 @@ jobs:
         if: ${{ github.event_name == 'push' }}
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
             const p = process.env.SUMMARY_PATH;
@@ -164,7 +165,8 @@ jobs:
               return;
             }
             const body = fs.readFileSync(p, 'utf8');
-            await github.rest.repos.createCommitComment({
+
+            await github.request('POST /repos/{owner}/{repo}/commits/{commit_sha}/comments', {
               owner: context.repo.owner,
               repo: context.repo.repo,
               commit_sha: context.sha,
@@ -172,6 +174,7 @@ jobs:
             });
         env:
           SUMMARY_PATH: ${{ steps.review_fb.outputs.summary_md_path }}
+
 
       # --- Artefacto con HTML/JSON/MD ---
       - name: Upload review artifact
