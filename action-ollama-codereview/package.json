@@ -1,24 +1,16 @@
 {
   "name": "action-ollama-codereview",
-  "version": "1.4.0",
-  "description": "GitHub Action para revisión de código con Ollama (Qwen, LLaMA, Mistral, etc.)",
+  "version": "1.4.2",
+  "description": "GitHub Action para revisión de código con Ollama",
   "main": "dist/index.js",
   "scripts": {
-    "build": "ncc build index.js -o dist -m",
-    "lint": "eslint . --ext .js,.mjs,.cjs",
-    "test": "node --test"
+    "build": "ncc build index.js -o dist -m"
   },
-  "author": "Bernardo Herrera <bernherre@gmail.com>",
-  "license": "MIT",
   "dependencies": {
     "@actions/core": "^1.11.1",
     "fast-glob": "^3.3.3"
   },
   "devDependencies": {
-    "@vercel/ncc": "^0.38.1",
-    "eslint": "^9.9.0"
-  },
-  "engines": {
-    "node": ">=20 "
+    "@vercel/ncc": "^0.38.1"
   }
 }
