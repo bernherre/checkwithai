@@ -130,7 +130,6 @@ async function callOllamaChat({ serverUrl, model, userPrompt, requestTimeoutMs, 
         return data?.message?.content ?? "";
     } catch (err) {
         clearTimeout(to);
-        // Anti “fetch failed” → reintentos exponenciales + jitter
         if (attempt < maxAttempts) {
             const backoff = (1000 * Math.pow(2, attempt - 1)) + Math.floor(Math.random() * 400);
             core.warning(`[retry] intento ${attempt} falló (${err.message || err}); reintentando en ${backoff}ms`);
@@ -144,7 +143,6 @@ async function callOllamaChat({ serverUrl, model, userPrompt, requestTimeoutMs, 
 function filterOllamaOptions(opts) {
     const out = {};
     if (!opts) return out;
-    // mapea nombres del input a opciones de Ollama
     if (opts.num_predict != null) out.num_predict = Number(opts.num_predict);
     if (opts.num_ctx != null) out.num_ctx = Number(opts.num_ctx);
     if (opts.temperature != null) out.temperature = Number(opts.temperature);
@@ -219,6 +217,7 @@ function writeStepSummary(results) {
 
     const summaryPath = process.env.GITHUB_STEP_SUMMARY;
     if (summaryPath) fs.appendFileSync(summaryPath, summary + "\n");
+    return summary;
 }
 
 function generateHtmlReport(results) {
@@ -318,9 +317,7 @@ async function resolveFiles({ file_list_path, file_list, file_glob, exclude_glob
     if (files.length === 0) {
         const patterns = [
             file_glob,
-            // exclusiones user
             ...(String(exclude_glob || "").split(/\r?\n/).map(s => s.trim()).filter(Boolean).map(p => `!${p}`)),
-            // exclusiones por defecto
             "!**/.git/**",
             "!**/*.png", "!**/*.jpg", "!**/*.jpeg", "!**/*.gif", "!**/*.webp",
             "!**/*.pdf", "!**/*.zip", "!**/*.ico", "!**/*.wasm", "!**/*.exe", "!**/*.dll", "!**/*.so"
@@ -356,7 +353,6 @@ function readTextFileCapped(file, maxBytes) {
 // === Main ===
 async function run() {
     try {
-        // Inputs
         const model = core.getInput("model", { required: true });
         const serverUrl = core.getInput("server_url", { required: true });
         const file_glob = core.getInput("file_glob") || "**/*.{ts,tsx,js,jsx,py,cs,java,go,rs}";
@@ -390,7 +386,6 @@ async function run() {
 
         const limiter = createLimiter(Math.max(1, reviewMaxConcurrency));
         const results = [];
-        let idx = 0;
 
         const tasks = files.map(file => limiter(async () => {
             const ext = extOf(file);
@@ -399,7 +394,6 @@ async function run() {
 
             core.info(`[file] ${file} size=${bytes}B used=${Math.min(bytes, maxBytesPerFile)}B${truncated ? " [truncated]" : ""}`);
             const prompt = buildUserPrompt(file, ext, text);
-            // opciones de ollama
             const ollamaOpts = {
                 num_predict: num_predict ? Number(num_predict) : undefined,
                 num_ctx: num_ctx ? Number(num_ctx) : undefined,
@@ -427,10 +421,8 @@ async function run() {
             results.push({ file, issues });
         }));
 
-        // Espera a todas las tareas
         for (const t of tasks) { await t; }
 
-        // Genera salida web
         const outDir = path.join(process.cwd(), "ollama-review-report");
         fs.mkdirSync(outDir, { recursive: true });
         fs.writeFileSync(path.join(outDir, "report.json"), JSON.stringify(results, null, 2));
@@ -439,10 +431,13 @@ async function run() {
 
         // UI
         emitAnnotations(results);
-        writeStepSummary(results);
+        const md = writeStepSummary(results);
+        const mdPath = path.join(outDir, "summary.md");
+        fs.writeFileSync(mdPath, md + "\n");
 
         // Outputs
         core.setOutput("report_dir", outDir);
+        core.setOutput("summary_md_path", mdPath);
         core.setOutput("retention_days", retentionDays.toString());
 
         // Gate por CRÍTICA
