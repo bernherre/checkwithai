@@ -4,6 +4,9 @@ const fg = require("fast-glob");
 const fs = require("fs");
 const path = require("path");
 
+// Directorio de artefactos (siempre el mismo)
+const OUT_DIR = path.join(process.cwd(), "ollama-review-report");
+
 // === Config & utils ===
 const DEFAULT_REQUEST_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_BYTES_PER_FILE = 200_000;
@@ -225,11 +228,50 @@ function writeStepSummary(results) {
 
     const summaryPath = process.env.GITHUB_STEP_SUMMARY;
     if (summaryPath) fs.appendFileSync(summaryPath, summary + "\n");
+}
 
-    const summaryMdPath = path.join(outDir, 'summary.md');
-    fs.writeFileSync(summaryMdPath, summary, 'utf8');
-    core.setOutput('summary_md_path', summaryMdPath);
+function buildMarkdownSummary(results) {
+    const totals = { CRÍTICA: 0, ALTA: 0, MEDIA: 0, BAJA: 0 };
+    let totalIssues = 0;
 
+    for (const r of results) {
+        for (const i of r.issues) {
+            const sev = (i.severity || "").toUpperCase();
+            if (totals[sev] !== undefined) totals[sev]++;
+            totalIssues++;
+        }
+    }
+
+    const lines = [];
+    lines.push(`# 🧠 Ollama Code Review`);
+    lines.push(``);
+    lines.push(`**Archivos analizados:** ${results.length}  |  **Issues totales:** ${totalIssues}`);
+    lines.push(``);
+    lines.push(`- CRÍTICA: ${totals["CRÍTICA"]}`);
+    lines.push(`- ALTA: ${totals["ALTA"]}`);
+    lines.push(`- MEDIA: ${totals["MEDIA"]}`);
+    lines.push(`- BAJA: ${totals["BAJA"]}`);
+    lines.push(``);
+    lines.push(`## Detalle por archivo`);
+    if (results.length === 0) {
+        lines.push(`_Sin archivos para revisar._`);
+    } else {
+        for (const r of results) {
+            lines.push(`### \`${r.file}\``);
+            if (!r.issues.length) {
+                lines.push(`- _Sin hallazgos_`);
+            } else {
+                for (const i of r.issues) {
+                    const sev = i.severity || "";
+                    const line = i.line != null ? ` (línea(s): ${i.line})` : "";
+                    lines.push(`- **${sev}**${line}: ${i.description || ""}`);
+                }
+            }
+            lines.push(``);
+        }
+    }
+    lines.push(`_Artefactos_: \`ollama-review-report/index.html\`, \`ollama-review-report/report.json\``);
+    return lines.join("\n");
 }
 
 function generateHtmlReport(results) {
@@ -403,7 +445,7 @@ async function run() {
         const tasks = files.map(file => limiter(async () => {
             const ext = extOf(file);
             const { text, truncated, err, bytes } = readTextFileCapped(file, maxBytesPerFile);
-            if (err) { core.warning(`No se pudo leer como texto: ${file}`); return; }
+            if (err) { core.warning(`No se pudo leer como texto: ${file}`); results.push({ file, issues: [] }); return; }
 
             core.info(`[file] ${file} size=${bytes}B used=${Math.min(bytes, maxBytesPerFile)}B${truncated ? " [truncated]" : ""}`);
             const prompt = buildUserPrompt(file, ext, text);
@@ -436,44 +478,24 @@ async function run() {
 
         for (const t of tasks) { await t; }
 
-        // Genera salida web
-        const outDir = path.join(process.cwd(), "ollama-review-report");
-        fs.mkdirSync(outDir, { recursive: true });
-        fs.writeFileSync(path.join(outDir, "report.json"), JSON.stringify(results, null, 2));
-        fs.writeFileSync(path.join(outDir, "index.html"), generateHtmlReport(results));
-        core.info(`Reporte generado en ${outDir}`);
+        // === SIEMPRE crear artefactos ===
+        fs.mkdirSync(OUT_DIR, { recursive: true });
+        fs.writeFileSync(path.join(OUT_DIR, "report.json"), JSON.stringify(results, null, 2));
+        fs.writeFileSync(path.join(OUT_DIR, "index.html"), generateHtmlReport(results));
+
+        // Markdown para comentar en PR/commit
+        const summaryMd = buildMarkdownSummary(results);
+        const summaryMdPath = path.join(OUT_DIR, "summary.md");
+        fs.writeFileSync(summaryMdPath, summaryMd, "utf8");
+
+        core.info(`Reporte generado en ${OUT_DIR}`);
 
         // UI
         emitAnnotations(results);
         writeStepSummary(results);
 
-        // --- Resumen Markdown para comentar en PR/commit ---
-        const summaryMd = (() => {
-            const counts = { CRÍTICA: 0, ALTA: 0, MEDIA: 0, BAJA: 0 };
-            let total = 0;
-            for (const r of results) for (const i of r.issues) {
-                const k = (i.severity || "").toUpperCase();
-                if (counts[k] !== undefined) counts[k]++;
-                total++;
-            }
-            return [
-                `# 🧠 Ollama Code Review`,
-                ``,
-                `**Archivos analizados:** ${results.length}  |  **Issues totales:** ${total}`,
-                ``,
-                `- CRÍTICA: ${counts["CRÍTICA"]}`,
-                `- ALTA: ${counts["ALTA"]}`,
-                `- MEDIA: ${counts["MEDIA"]}`,
-                `- BAJA: ${counts["BAJA"]}`,
-                ``,
-                `**Reporte HTML**: \`ollama-review-report/index.html\`  |  **JSON**: \`ollama-review-report/report.json\``
-            ].join("\n");
-        })();
-        const summaryMdPath = path.join(outDir, "summary.md");
-        fs.writeFileSync(summaryMdPath, summaryMd);
-
         // Outputs
-        core.setOutput("report_dir", outDir);
+        core.setOutput("report_dir", OUT_DIR);
         core.setOutput("summary_md_path", summaryMdPath);
         core.setOutput("retention_days", retentionDays.toString());
 
