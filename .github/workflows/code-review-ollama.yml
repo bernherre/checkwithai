@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write           # <--- necesita write para comentar en commits
+  contents: write
   pull-requests: write
 
 concurrency:
@@ -27,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # --- Ollama sin Docker + cache de modelos ---
+      # Ollama + cache de modelos
       - name: Setup Ollama
         uses: ai-action/setup-ollama@v1
 
@@ -47,7 +47,7 @@ jobs:
             -d '{"model":"'"${MODEL}"'","stream":false,"messages":[{"role":"user","content":"ok"}],"keep_alive":"10m"}' \
             | head -c 200
 
-      # --- Solo PR: recolectar archivos cambiados (solo código) ---
+      # PR: recolectar archivos cambiados (solo código)
       - name: Collect changed files (PR only)
         id: changed
         if: ${{ github.event_name == 'pull_request' }}
@@ -76,10 +76,9 @@ jobs:
 
       - name: Debug changed count
         if: ${{ github.event_name == 'pull_request' }}
-        run: |
-            echo "Changed count: ${{ steps.changed.outputs.count || '0' }}"
+        run: echo "Changed count: ${{ steps.changed.outputs.count || '0' }}"
 
-      # --- PR con cambiados → lista ---
+      # PR con cambios de código
       - name: Run Ollama Code Review (PR changed files)
         id: review_pr
         if: ${{ github.event_name == 'pull_request' && steps.changed.outputs.count != '0' }}
@@ -103,14 +102,13 @@ jobs:
             yarn.lock
             pnpm-lock.yaml
           fail_on_critica: "true"
-          retention_days: "7"
           request_timeout_ms: "600000"
           max_bytes_per_file: "200000"
           ollama_num_predict: "192"
           ollama_num_ctx: "1024"
           ollama_temperature: "0"
 
-      # --- Fallback: push o PR sin cambiados de código → glob sólo código ---
+      # Fallback (push o PR sin cambios de código)
       - name: Run Ollama Code Review (fallback only-code)
         id: review_fb
         if: ${{ github.event_name != 'pull_request' || steps.changed.outputs.count == '0' }}
@@ -134,15 +132,13 @@ jobs:
             yarn.lock
             pnpm-lock.yaml
           fail_on_critica: "true"
-          retention_days: "7"
           request_timeout_ms: "600000"
           max_bytes_per_file: "200000"
           ollama_num_predict: "192"
           ollama_num_ctx: "1024"
           ollama_temperature: "0"
 
-      # --- Publicar el resumen en el “chat” ---
-      # PR → comentario en el hilo del PR
+      # Comentar con el resumen (PR)
       - name: Comment on PR with summary
         if: ${{ github.event_name == 'pull_request' }}
         uses: peter-evans/create-or-update-comment@v4
@@ -151,26 +147,16 @@ jobs:
           edit-mode: replace
           body-path: ${{ steps.review_pr.outputs.summary_md_path || steps.review_fb.outputs.summary_md_path }}
 
-      # Push sin PR → comentario en el commit
+      # Comentar en el commit (push)
       - name: Comment on commit with summary (push)
         if: ${{ github.event_name == 'push' }}
         uses: actions/github-script@v7
         with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
-
             const p = process.env.SUMMARY_PATH;
-            if (!p || !fs.existsSync(p)) {
-              core.warning(`Summary not found at: ${p}`);
-              return;
-            }
-
-            const body = fs.readFileSync(p, 'utf8').trim();
-            if (!body) {
-              core.warning('Empty summary body; skipping commit comment.');
-              return;
-            }
-
+            const body = fs.readFileSync(p, 'utf8');
             await github.rest.repos.createCommitComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -180,15 +166,10 @@ jobs:
         env:
           SUMMARY_PATH: ${{ steps.review_fb.outputs.summary_md_path }}
 
-
-
-      # --- Artefacto con HTML/JSON/MD ---
+      # Artefacto con HTML/JSON/MD
       - name: Upload review artifact
         uses: actions/upload-artifact@v4
         with:
           name: ollama-review
-          path: |
-            ollama-review-report/index.html
-            ollama-review-report/report.json
-            ollama-review-report/summary.md
+          path: ollama-review-report/**
           retention-days: 7
