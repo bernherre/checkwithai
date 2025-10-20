@@ -1,10 +1,10 @@
 {
   "name": "action-ollama-codereview",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "description": "GitHub Action para revisión de código con Ollama",
   "main": "dist/index.js",
   "scripts": {
-    "build": "ncc build index.js -o dist -m"
+    "build": "ncc build index.js -o dist -m && node -e \"require('fs').writeFileSync('dist/package.json','{\\\"type\\\":\\\"commonjs\\\",\\\"main\\\":\\\"index.js\\\"}')\""
   },
   "dependencies": {
     "@actions/core": "^1.11.1",
