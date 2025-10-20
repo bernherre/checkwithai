@@ -1,7 +1,7 @@
 ﻿# Ollama Code Review Action
 
-[![CI](https://github.com/bernherre/checkwithai/actions/workflows/code-review-ollama.yml/badge.svg)](https://github.com/OWNER/REPO/actions/workflows/code-review-ollama.yml)
-[![Release](https://img.shields.io/github/v/release/OWNER/REPO?display_name=tag&sort=semver)](https://github.com/OWNER/REPO/releases)
+[![CI](https://github.com/bernherre/bernherre/actions/workflows/code-review-ollama.yml/badge.svg)](https://github.com/bernherre/checkwithai/actions/workflows/code-review-ollama.yml)
+[![Release](https://img.shields.io/github/v/release/bernherre/checkwithai?display_name=tag&sort=semver)](https://github.com/bernherre/checkwithai/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 Revisa archivos de código con un **LLM local (Ollama)** y genera:
