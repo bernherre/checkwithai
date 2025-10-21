@@ -1,6 +1,6 @@
 {
   "name": "action-ollama-codereview",
-  "version": "1.4.3",
+  "version": "1.0.0",
   "description": "GitHub Action para revisión de código con Ollama",
   "main": "dist/index.js",
   "scripts": {
