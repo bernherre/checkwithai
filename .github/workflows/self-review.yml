@@ -1,6 +1,7 @@
-﻿name: release-please
+﻿﻿name: Code Review (Ollama)
 
 on:
+  pull_request:
   push:
     branches: [ main ]
   workflow_dispatch:
@@ -9,19 +10,178 @@ permissions:
   contents: write
   pull-requests: write
 
+concurrency:
+  group: "ollama-code-review"
+  cancel-in-progress: true
+
+env:
+  MODEL: qwen2.5-coder:7b
+  NO_PROXY: "127.0.0.1,localhost"
+  REVIEW_MAX_CONCURRENCY: "1"   # súbelo a 2 cuando esté estable
+
 jobs:
-  release:
+  review:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+
     steps:
-      - name: Release Please
-        id: rp
-        uses: google-github-actions/release-please-action@v4
+      - uses: actions/checkout@v4
+
+      # --- Ollama sin Docker + cache de modelos ---
+      - name: Setup Ollama
+        uses: ai-action/setup-ollama@v1
+
+      - name: Cache Ollama models
+        uses: actions/cache@v4
         with:
-          release-type: simple
-          package-name: action-ollama-codereview
-          bump-minor-pre-major: true
-          changelog-types: >
-            [{"type":"feat","section":"Features","hidden":false},
-             {"type":"fix","section":"Bug Fixes","hidden":false},
-             {"type":"docs","section":"Docs","hidden":false},
-             {"type":"chore","section":"Chores","hidden":true}]
+          path: ~/.ollama/models
+          key: ollama-${{ runner.os }}-${{ env.MODEL }}
+          restore-keys: |
+            ollama-${{ runner.os }}-
+
+      - name: Pull & warm model
+        run: |
+          ollama pull "${MODEL}"
+          curl -sS -X POST http://127.0.0.1:11434/api/chat \
+            -H "Content-Type: application/json" \
+            -d '{"model":"'"${MODEL}"'","stream":false,"messages":[{"role":"user","content":"ok"}],"keep_alive":"10m"}' \
+            | head -c 200
+
+      # --- Solo PR: recolectar archivos cambiados (solo código) ---
+      - name: Collect changed files (PR only)
+        id: changed
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const pr = context.payload.pull_request;
+            const per_page = 100;
+            let page = 1, files = [];
+            while (true) {
+              const { data } = await github.rest.pulls.listFiles({
+                ...context.repo, pull_number: pr.number, per_page, page
+              });
+              files.push(...data);
+              if (data.length < per_page) break;
+              page++;
+            }
+            const paths = files
+              .filter(f => f.status !== 'removed')
+              .map(f => f.filename)
+              .filter(p => p.match(/\.(ts|tsx|js|jsx|py|cs|java|go|rs)$/i)); // sólo código
+            fs.writeFileSync('changed-files.txt', paths.join('\n'));
+            core.setOutput('count', String(paths.length));
+            core.setOutput('path', 'changed-files.txt');
+
+      - name: Debug changed count
+        if: ${{ github.event_name == 'pull_request' }}
+        run: |
+            echo "Changed count: ${{ steps.changed.outputs.count || '0' }}"
+
+      # --- PR con cambiados → lista ---
+      - name: Run Ollama Code Review (PR changed files)
+        id: review_pr
+        if: ${{ github.event_name == 'pull_request' && steps.changed.outputs.count != '0' }}
+        uses: ./action-ollama-codereview
+        env:
+          REVIEW_MAX_CONCURRENCY: ${{ env.REVIEW_MAX_CONCURRENCY }}
+        with:
+          model: ${{ env.MODEL }}
+          server_url: http://127.0.0.1:11434
+          file_list_path: ${{ steps.changed.outputs.path }}
+          exclude_glob: |
+            **/node_modules/**
+            **/dist/**
+            **/build/**
+            **/.next/**
+            **/coverage/**
+            **/ollama-review-report/**
+            **/*.lock
+            package-lock.json
+            yarn.lock
+            pnpm-lock.yaml
+          fail_on_critica: "true"
+          retention_days: "7"
+          request_timeout_ms: "600000"
+          max_bytes_per_file: "200000"
+          ollama_num_predict: "192"
+          ollama_num_ctx: "1024"
+          ollama_temperature: "0"
+
+      # --- Fallback: push o PR sin cambiados de código → glob sólo código ---
+      - name: Run Ollama Code Review (fallback only-code)
+        id: review_fb
+        if: ${{ github.event_name != 'pull_request' || steps.changed.outputs.count == '0' }}
+        uses: ./action-ollama-codereview
+        env:
+          REVIEW_MAX_CONCURRENCY: ${{ env.REVIEW_MAX_CONCURRENCY }}
+        with:
+          model: ${{ env.MODEL }}
+          server_url: http://127.0.0.1:11434
+          file_glob: "src/**/*.{ts,tsx,js,jsx,py,cs,java,go,rs}"
+          exclude_glob: |
+            **/node_modules/**
+            **/dist/**
+            **/build/**
+            **/.next/**
+            **/coverage/**
+            **/ollama-review-report/**
+            **/*.lock
+            package-lock.json
+            yarn.lock
+            pnpm-lock.yaml
+          fail_on_critica: "true"
+          retention_days: "7"
+          request_timeout_ms: "600000"
+          max_bytes_per_file: "200000"
+          ollama_num_predict: "192"
+          ollama_num_ctx: "1024"
+          ollama_temperature: "0"
+
+      # --- Publicar el resumen en el “chat” ---
+      # PR → comentario en el hilo del PR
+      - name: Comment on PR with summary
+        if: ${{ github.event_name == 'pull_request' }}
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          edit-mode: replace
+          body-path: ${{ steps.review_pr.outputs.summary_md_path || steps.review_fb.outputs.summary_md_path }}
+
+      # Push sin PR → comentario en el commit
+      - name: Comment on commit with summary (push)
+        if: ${{ github.event_name == 'push' }}
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+
+            const p = process.env.SUMMARY_PATH;
+            if (!p || !fs.existsSync(p)) {
+              core.warning(`Summary not found at: ${p}`);
+              return;
+            }
+             const body = fs.readFileSync(p, 'utf8').trim();
+            if (!body) {
+              core.warning('Empty summary body; skipping commit comment.');
+              return;
+            }
+
+            await github.rest.repos.createCommitComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: context.sha,
+              body
+            });
+        env:
+          SUMMARY_PATH: ${{ steps.review_fb.outputs.summary_md_path }}
+
+
+      # --- Artefacto con HTML/JSON/MD ---
+      - name: Upload review artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ollama-review
+          path: ollama-review-report/**
+          retention-days: 7

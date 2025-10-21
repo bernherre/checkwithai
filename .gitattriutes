@@ -1,5 +1,9 @@
-* text=auto eol=lf
-*.js text eol=lf
-*.yml text eol=lf
-*.yaml text eol=lf
-*.md text eol=lf
+# fuerza LF para código fuente (sin BOM)
+*.js           text eol=lf
+*.json         text eol=lf
+*.yml          text eol=lf
+*.yaml         text eol=lf
+*.md           text eol=lf
+
+# el bundle NO se toca: sin conversión de EOL, sin BOMs
+action-ollama-codereview/dist/* -text

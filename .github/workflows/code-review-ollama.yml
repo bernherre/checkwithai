@@ -39,6 +39,14 @@ jobs:
           restore-keys: |
             ollama-${{ runner.os }}-
 
+      - name: Sanity check action bundle
+        run: |
+            node -e "require('fs').readFileSync('./action-ollama-codereview/dist/index.js','utf8')"
+            if grep -q $'\xEF\xBB\xBF' ./action-ollama-codereview/dist/index.js; then
+              echo "BOM encontrado en dist/index.js"; exit 1; 
+            fi
+
+
       - name: Pull & warm model
         run: |
           ollama pull "${MODEL}"
